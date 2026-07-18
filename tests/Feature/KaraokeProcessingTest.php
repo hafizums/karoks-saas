@@ -307,6 +307,79 @@ it('releases overlapping jobs instead of permanently dropping them', function ()
     $lock->release();
 });
 
+it('uses retryUntil and maxExceptions so overlap releases do not exhaust processing retries', function () {
+    $job = new ProcessKaraokeProject(1, (string) Str::uuid());
+
+    expect($job->maxExceptions)->toBe(3)
+        ->and($job->retryUntil()->getTimestamp())->toBeGreaterThan(now()->addMinutes(4)->getTimestamp());
+});
+
+it('survives more than three overlap releases before executing successfully', function () {
+    $user = processingUser();
+    $project = createUploadedProcessingProject($user);
+    app(KaraokeProcessingStateService::class)->queueForProcessing($project);
+    $project->refresh();
+
+    $executed = false;
+    $releasedCount = 0;
+
+    $job = new class($project->id, (string) $project->processing_run_id) extends ProcessKaraokeProject
+    {
+        public int $releasedCount = 0;
+
+        public function release($delay = 0)
+        {
+            $this->releasedCount++;
+
+            return $this;
+        }
+    };
+
+    $middleware = $job->middleware()[0];
+    $lock = Cache::lock($middleware->getLockKey($job), 360);
+    expect($lock->get())->toBeTrue();
+
+    for ($attempt = 0; $attempt < 5; $attempt++) {
+        $middleware->handle($job, function () use (&$executed): void {
+            $executed = true;
+        });
+    }
+
+    expect($job->releasedCount)->toBe(5)
+        ->and($executed)->toBeFalse();
+
+    $lock->release();
+
+    $middleware->handle($job, function () use (&$executed): void {
+        $executed = true;
+    });
+
+    expect($executed)->toBeTrue();
+});
+
+it('preserves source_missing as a non retryable safe error code', function () {
+    $user = processingUser();
+    $project = createUploadedProcessingProject($user);
+    $state = app(KaraokeProcessingStateService::class);
+
+    $state->queueForProcessing($project);
+    $project->refresh();
+    $runId = (string) $project->processing_run_id;
+
+    $state->markFailed(
+        $project->fresh(),
+        $runId,
+        'source_missing',
+        'The uploaded source audio could not be found.',
+        retryable: false,
+    );
+
+    $project->refresh();
+
+    expect($project->error_code)->toBe('source_missing')
+        ->and($state->isRetryable($project))->toBeFalse();
+});
+
 it('retries transient processing failures before succeeding', function () {
     $processor = new FlakyKaraokeProcessor(failuresBeforeSuccess: 2);
     $user = processingUser();

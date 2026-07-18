@@ -24,7 +24,7 @@ class ProcessKaraokeProject implements ShouldQueue
     use Queueable;
     use SerializesModels;
 
-    public int $tries = 3;
+    public int $maxExceptions = 3;
 
     public int $timeout = 300;
 
@@ -34,6 +34,16 @@ class ProcessKaraokeProject implements ShouldQueue
     public function backoff(): array
     {
         return [5, 30, 120];
+    }
+
+    public function retryUntil(): \DateTimeInterface
+    {
+        $seconds = max(
+            $this->timeout + 60,
+            (int) config('karoks.processing.overlap_expire_after_seconds', 360),
+        );
+
+        return now()->addSeconds($seconds);
     }
 
     public function __construct(
@@ -147,6 +157,14 @@ class ProcessKaraokeProject implements ShouldQueue
         $project = KaraokeProject::query()->find($this->karaokeProjectId);
 
         if ($project === null) {
+            return;
+        }
+
+        if ($exception instanceof ProcessingRunInterruptedException) {
+            return;
+        }
+
+        if (! $project->processing_run_id || $project->processing_run_id !== $this->processingRunId) {
             return;
         }
 

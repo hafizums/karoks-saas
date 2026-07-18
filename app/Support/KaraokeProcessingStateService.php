@@ -240,7 +240,7 @@ class KaraokeProcessingStateService
 
     public function markFailed(KaraokeProject $project, string $runId, string $errorCode, string $errorMessage, bool $retryable = true): bool
     {
-        return DB::transaction(function () use ($project, $runId, $errorCode, $errorMessage, $retryable) {
+        return DB::transaction(function () use ($project, $runId, $errorCode, $errorMessage) {
             $locked = KaraokeProject::query()->whereKey($project->id)->lockForUpdate()->first();
 
             if ($locked === null || ! $this->runIsActive($locked, $runId)) {
@@ -253,10 +253,6 @@ class KaraokeProcessingStateService
 
             $safeCode = $this->sanitizeErrorCode($errorCode);
             $safeMessage = $this->sanitizeErrorMessage($errorMessage);
-
-            if (! $retryable) {
-                $safeCode = 'unsupported_audio';
-            }
 
             $locked->forceFill([
                 'status' => KaraokeProjectStatus::Failed,
@@ -294,7 +290,7 @@ class KaraokeProcessingStateService
             return false;
         }
 
-        return ! in_array($project->error_code, ['unsupported_audio', 'cancelled'], true);
+        return ! in_array($project->error_code, ['unsupported_audio', 'source_missing', 'cancelled'], true);
     }
 
     public function runIsActive(KaraokeProject $project, string $runId): bool
