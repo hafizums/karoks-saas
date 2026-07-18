@@ -92,7 +92,7 @@
 
                     <div class="karoks-editor-layout">
                         <section
-                            class="karoks-editor-panel is-active"
+                            class="karoks-editor-panel"
                             data-panel="edit"
                             :class="{ 'is-active': activeTab === 'edit' }"
                             aria-label="Editor controls"
@@ -169,67 +169,71 @@
                             <div class="karoks-editor-preview-wrap karoks-page" x-ref="previewStage">
                                 <div
                                     class="karaoke-stage is-compact"
-                                    data-karoks-preview-player
-                                    :data-bg="$parent.theme.backgroundPreset"
-                                    :data-lyric-size="$parent.theme.lyricSize"
-                                    :style="$parent.themeStyle"
-                                    x-data="karoksPlayer(@js([
-                                        'lines' => $editorState['lines'],
-                                        'audioUrl' => $audioUrl,
-                                        'compact' => true,
-                                    ]))"
+                                    :data-bg="theme.backgroundPreset"
+                                    :data-lyric-size="theme.lyricSize"
+                                    :style="themeStyle"
                                 >
                                     <header class="stage-header">
                                         <p class="brand">Karoks</p>
                                         <div class="track-meta">
-                                            <p class="track-title" x-text="$parent.title"></p>
-                                            <p class="track-artist" x-show="$parent.artist" x-text="$parent.artist"></p>
+                                            <p class="track-title" x-text="title"></p>
+                                            <p class="track-artist" x-show="artist" x-text="artist"></p>
                                         </div>
                                     </header>
 
-                                    <div class="lyric-stage" aria-label="Synchronized lyrics preview">
-                                        <p class="lyric-line lyric-previous" :class="{ 'is-empty': ! lyricWindow.previous }" x-text="lyricWindow.previous ? lineText(lyricWindow.previous) : '\u00a0'"></p>
-                                        <p class="lyric-line lyric-current">
-                                            <template x-if="lyricWindow.current">
-                                                <span>
-                                                    <template x-for="(word, index) in lyricWindow.current.words" :key="word.id">
-                                                        <span>
-                                                            <span x-show="index > 0">&nbsp;</span>
-                                                            <span :class="wordClass(word)" :style="wordStyle(word)">
-                                                                <template x-if="wordIsActive(word)">
-                                                                    <span>
-                                                                        <span class="karaoke-word-base" x-text="word.text" aria-hidden="true"></span>
-                                                                        <span class="karaoke-word-fill" x-text="word.text" aria-hidden="true"></span>
-                                                                        <span class="sr-only" x-text="word.text"></span>
-                                                                    </span>
-                                                                </template>
-                                                                <template x-if="! wordIsActive(word)">
-                                                                    <span x-text="word.text"></span>
-                                                                </template>
+                                    <div
+                                        class="karoks-preview-player-root"
+                                        data-karoks-preview-player
+                                        x-data="karoksPlayer(@js([
+                                            'lines' => $editorState['lines'],
+                                            'audioUrl' => $audioUrl,
+                                            'compact' => true,
+                                        ]))"
+                                    >
+                                        <div class="lyric-stage" aria-label="Synchronized lyrics preview">
+                                            <p class="lyric-line lyric-previous" :class="{ 'is-empty': ! lyricWindow.previous }" x-text="lyricWindow.previous ? lineText(lyricWindow.previous) : '\u00a0'"></p>
+                                            <p class="lyric-line lyric-current">
+                                                <template x-if="lyricWindow.current">
+                                                    <span>
+                                                        <template x-for="(word, index) in lyricWindow.current.words" :key="word.id">
+                                                            <span>
+                                                                <span x-show="index > 0">&nbsp;</span>
+                                                                <span :class="wordClass(word)" :style="wordStyle(word)">
+                                                                    <template x-if="wordIsActive(word)">
+                                                                        <span>
+                                                                            <span class="karaoke-word-base" x-text="word.text" aria-hidden="true"></span>
+                                                                            <span class="karaoke-word-fill" x-text="word.text" aria-hidden="true"></span>
+                                                                            <span class="sr-only" x-text="word.text"></span>
+                                                                        </span>
+                                                                    </template>
+                                                                    <template x-if="! wordIsActive(word)">
+                                                                        <span x-text="word.text"></span>
+                                                                    </template>
+                                                                </span>
                                                             </span>
-                                                        </span>
-                                                    </template>
-                                                </span>
-                                            </template>
-                                        </p>
-                                        <p class="lyric-line lyric-next" :class="{ 'is-empty': ! lyricWindow.next }" x-text="lyricWindow.next ? lineText(lyricWindow.next) : '\u00a0'"></p>
-                                    </div>
-
-                                    <div class="karaoke-controls">
-                                        <div class="seek-row">
-                                            <span class="time-label" x-text="formattedCurrentTime"></span>
-                                            <label class="sr-only" for="karoks-editor-seek">Seek playback position</label>
-                                            <input id="karoks-editor-seek" type="range" class="seek-slider" min="0" :max="seekMax" step="0.01" :value="currentTime" @input="onSeekInput($event)">
-                                            <span class="time-label" x-text="formattedDuration"></span>
+                                                        </template>
+                                                    </span>
+                                                </template>
+                                            </p>
+                                            <p class="lyric-line lyric-next" :class="{ 'is-empty': ! lyricWindow.next }" x-text="lyricWindow.next ? lineText(lyricWindow.next) : '\u00a0'"></p>
                                         </div>
-                                        <div class="control-row">
-                                            <button type="button" class="icon-btn play-btn" @click="togglePlay()" :aria-label="isPlaying ? 'Pause' : 'Play'">
-                                                <span x-text="isPlaying ? '❚❚' : '▶'"></span>
-                                            </button>
-                                        </div>
-                                    </div>
 
-                                    <audio x-ref="audio" :src="audioUrl" preload="metadata" class="sr-only"></audio>
+                                        <div class="karaoke-controls">
+                                            <div class="seek-row">
+                                                <span class="time-label" x-text="formattedCurrentTime"></span>
+                                                <label class="sr-only" for="karoks-editor-seek">Seek playback position</label>
+                                                <input id="karoks-editor-seek" type="range" class="seek-slider" min="0" :max="seekMax" step="0.01" :value="currentTime" @input="onSeekInput($event)">
+                                                <span class="time-label" x-text="formattedDuration"></span>
+                                            </div>
+                                            <div class="control-row">
+                                                <button type="button" class="icon-btn play-btn" @click="togglePlay()" :aria-label="isPlaying ? 'Pause' : 'Play'">
+                                                    <span x-text="isPlaying ? '❚❚' : '▶'"></span>
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        <audio x-ref="audio" :src="audioUrl" preload="metadata" class="sr-only"></audio>
+                                    </div>
                                 </div>
                             </div>
                         </section>

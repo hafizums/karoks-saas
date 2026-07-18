@@ -231,6 +231,10 @@
   border-radius: 0.75rem;
 }
 
+.karoks-preview-player-root {
+  display: contents;
+}
+
 .karoks-unavailable-editor {
   padding: 2rem;
   text-align: center;
