@@ -16,12 +16,6 @@ class KaraokeProject extends Model
     /** @use HasFactory<KaraokeProjectFactory> */
     use HasFactory;
 
-    /**
-     * Phase 2 demo projects may remain playable when they already contain a valid
-     * transcript and source audio but no instrumental output from Phase 4 processing.
-     */
-    public const LEGACY_DEMO_COMPATIBILITY = true;
-
     protected $fillable = [
         'public_id',
         'user_id',
@@ -109,17 +103,6 @@ class KaraokeProject extends Model
         return $this->hasPlayableTranscript();
     }
 
-    public function isLegacyDemoPlayable(): bool
-    {
-        if (! self::LEGACY_DEMO_COMPATIBILITY) {
-            return false;
-        }
-
-        return $this->status === KaraokeProjectStatus::Uploaded
-            && $this->hasPlayableTranscript()
-            && empty($this->instrumental_path);
-    }
-
     public function hasProcessedInstrumental(): bool
     {
         if (! $this->instrumental_path) {
@@ -131,15 +114,9 @@ class KaraokeProject extends Model
 
     public function isReadyForPlayback(): bool
     {
-        if (! $this->hasPlayableTranscript()) {
-            return false;
-        }
-
-        if ($this->status === KaraokeProjectStatus::Completed) {
-            return $this->hasProcessedInstrumental();
-        }
-
-        return $this->isLegacyDemoPlayable();
+        return $this->status === KaraokeProjectStatus::Completed
+            && $this->hasPlayableTranscript()
+            && $this->hasProcessedInstrumental();
     }
 
     public function isReadyForEditing(): bool
@@ -153,10 +130,6 @@ class KaraokeProject extends Model
             return $this->instrumental_path;
         }
 
-        if ($this->isLegacyDemoPlayable() && $this->source_path && KaraokeStorage::disk()->exists($this->source_path)) {
-            return $this->source_path;
-        }
-
         return null;
     }
 
@@ -164,10 +137,6 @@ class KaraokeProject extends Model
     {
         if ($this->status === KaraokeProjectStatus::Completed && $this->hasProcessedInstrumental()) {
             return $this->instrumental_mime_type ?: $this->mime_type;
-        }
-
-        if ($this->isLegacyDemoPlayable()) {
-            return $this->mime_type;
         }
 
         return null;

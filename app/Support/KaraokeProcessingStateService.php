@@ -153,6 +153,10 @@ class KaraokeProcessingStateService
                 return false;
             }
 
+            if ($locked->status === KaraokeProjectStatus::Processing && $locked->processing_run_id === $runId) {
+                return true;
+            }
+
             if ($locked->status !== KaraokeProjectStatus::Queued) {
                 return false;
             }
@@ -170,24 +174,34 @@ class KaraokeProcessingStateService
 
     public function recordProgress(KaraokeProject $project, string $runId, KaraokeProcessingStage $stage, int $progress): bool
     {
-        $locked = KaraokeProject::query()->whereKey($project->id)->lockForUpdate()->first();
+        return DB::transaction(function () use ($project, $runId, $stage, $progress) {
+            $locked = KaraokeProject::query()->whereKey($project->id)->lockForUpdate()->first();
 
-        if ($locked === null || ! $this->runIsActive($locked, $runId)) {
-            return false;
-        }
+            if ($locked === null || ! $this->runIsActive($locked, $runId)) {
+                return false;
+            }
 
-        if ($locked->status !== KaraokeProjectStatus::Processing) {
-            return false;
-        }
+            if ($locked->status !== KaraokeProjectStatus::Processing) {
+                return false;
+            }
 
-        $nextProgress = max((int) $locked->progress, $progress);
+            $currentStage = $locked->processing_stage
+                ? KaraokeProcessingStage::tryFrom($locked->processing_stage)
+                : null;
+            $currentIndex = $currentStage?->orderIndex() ?? -1;
+            $incomingIndex = $stage->orderIndex();
 
-        $locked->forceFill([
-            'processing_stage' => $stage->value,
-            'progress' => $nextProgress,
-        ])->save();
+            if ($incomingIndex < $currentIndex) {
+                return true;
+            }
 
-        return true;
+            $locked->forceFill([
+                'processing_stage' => $stage->value,
+                'progress' => max((int) $locked->progress, $progress),
+            ])->save();
+
+            return true;
+        });
     }
 
     public function markCompleted(KaraokeProject $project, string $runId, KaraokeProcessingResult $result): bool

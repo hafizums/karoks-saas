@@ -3,6 +3,8 @@
 namespace App\Jobs;
 
 use App\Contracts\KaraokeProcessor;
+use App\Exceptions\KaraokeProcessingException;
+use App\Exceptions\NonRetryableKaraokeProcessingException;
 use App\Exceptions\ProcessingRunInterruptedException;
 use App\Models\KaraokeProject;
 use App\Support\KaraokeProcessingStateService;
@@ -44,8 +46,13 @@ class ProcessKaraokeProject implements ShouldQueue
      */
     public function middleware(): array
     {
+        $releaseAfter = max(1, (int) config('karoks.processing.overlap_release_after_seconds', 5));
+        $expireAfter = max($this->timeout + 60, (int) config('karoks.processing.overlap_expire_after_seconds', 360));
+
         return [
-            (new WithoutOverlapping('karaoke-project:'.$this->karaokeProjectId))->dontRelease(),
+            (new WithoutOverlapping('karaoke-project:'.$this->karaokeProjectId))
+                ->releaseAfter($releaseAfter)
+                ->expireAfter($expireAfter),
         ];
     }
 
@@ -102,7 +109,25 @@ class ProcessKaraokeProject implements ShouldQueue
             }
         } catch (ProcessingRunInterruptedException) {
             return;
-        } catch (Throwable) {
+        } catch (NonRetryableKaraokeProcessingException $exception) {
+            $fresh = KaraokeProject::query()->find($project->id);
+
+            if ($fresh !== null) {
+                $stateService->markFailed(
+                    $fresh,
+                    $this->processingRunId,
+                    $this->resolveErrorCode($exception),
+                    $this->resolveErrorMessage($exception),
+                    retryable: false,
+                );
+            }
+        } catch (KaraokeProcessingException $exception) {
+            throw $exception;
+        } catch (Throwable $exception) {
+            if ($this->isRetryableThrowable($exception)) {
+                throw $exception;
+            }
+
             $fresh = KaraokeProject::query()->find($project->id);
 
             if ($fresh !== null) {
@@ -111,6 +136,7 @@ class ProcessKaraokeProject implements ShouldQueue
                     $this->processingRunId,
                     'processing_failed',
                     'Processing could not be completed. Please try again.',
+                    retryable: false,
                 );
             }
         }
@@ -127,7 +153,30 @@ class ProcessKaraokeProject implements ShouldQueue
         app(KaraokeProcessingStateService::class)->markJobFailed(
             $project,
             $this->processingRunId,
-            $exception ?? new \RuntimeException('Job failed'),
+            $exception ?? new KaraokeProcessingException('Job failed'),
         );
+    }
+
+    private function resolveErrorCode(NonRetryableKaraokeProcessingException $exception): string
+    {
+        return match ($exception->getMessage()) {
+            'source_missing' => 'source_missing',
+            'unsupported_audio' => 'unsupported_audio',
+            default => 'processing_failed',
+        };
+    }
+
+    private function resolveErrorMessage(NonRetryableKaraokeProcessingException $exception): string
+    {
+        return match ($exception->getMessage()) {
+            'source_missing' => 'The uploaded source audio could not be found.',
+            'unsupported_audio' => 'This audio format is not supported.',
+            default => 'Processing could not be completed.',
+        };
+    }
+
+    private function isRetryableThrowable(Throwable $exception): bool
+    {
+        return ! $exception instanceof NonRetryableKaraokeProcessingException;
     }
 }

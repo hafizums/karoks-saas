@@ -45,4 +45,11 @@ enum KaraokeProcessingStage: string
             self::Completed,
         ];
     }
+
+    public function orderIndex(): int
+    {
+        $index = array_search($this, self::ordered(), true);
+
+        return $index === false ? -1 : $index;
+    }
 }

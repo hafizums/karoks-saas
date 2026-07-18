@@ -3,6 +3,7 @@
 use App\Contracts\KaraokeProcessor;
 use App\Enums\KaraokeProcessingStage;
 use App\Enums\KaraokeProjectStatus;
+use App\Exceptions\KaraokeProcessingException;
 use App\Exceptions\UnsupportedKaroksProcessingDriverException;
 use App\Jobs\ProcessKaraokeProject;
 use App\Models\KaraokeProject;
@@ -16,11 +17,13 @@ use App\Support\KaraokeTranscriptParser;
 use DevDojo\Themes\Models\Theme;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Tests\Support\FlakyKaraokeProcessor;
 use Tests\Support\KaraokeTestTheme;
 
 uses(DatabaseTransactions::class);
@@ -239,11 +242,167 @@ it('never moves stage or progress backward during processing', function () {
     $state->beginProcessingRun($project->fresh(), $runId);
     $state->recordProgress($project->fresh(), $runId, KaraokeProcessingStage::Separating, 30);
     $project->refresh();
-    expect($project->progress)->toBe(30);
+    expect($project->processing_stage)->toBe(KaraokeProcessingStage::Separating->value)
+        ->and($project->progress)->toBe(30);
 
     $state->recordProgress($project->fresh(), $runId, KaraokeProcessingStage::Preparing, 10);
     $project->refresh();
-    expect($project->progress)->toBe(30);
+    expect($project->processing_stage)->toBe(KaraokeProcessingStage::Separating->value)
+        ->and($project->progress)->toBe(30);
+});
+
+it('ignores progress updates after cancellation', function () {
+    $user = processingUser();
+    $project = createUploadedProcessingProject($user);
+    $state = app(KaraokeProcessingStateService::class);
+
+    $state->queueForProcessing($project);
+    $project->refresh();
+    $runId = (string) $project->processing_run_id;
+
+    $state->beginProcessingRun($project->fresh(), $runId);
+    $state->recordProgress($project->fresh(), $runId, KaraokeProcessingStage::Separating, 30);
+    $state->cancelProcessing($project->fresh());
+
+    expect($state->recordProgress(
+        $project->fresh(),
+        $runId,
+        KaraokeProcessingStage::Transcribing,
+        60,
+    ))->toBeFalse();
+
+    $project->refresh();
+    expect($project->status)->toBe(KaraokeProjectStatus::Cancelled)
+        ->and($project->processing_stage)->toBeNull()
+        ->and($project->progress)->toBe(0);
+});
+
+it('releases overlapping jobs instead of permanently dropping them', function () {
+    $user = processingUser();
+    $project = createUploadedProcessingProject($user);
+    app(KaraokeProcessingStateService::class)->queueForProcessing($project);
+    $project->refresh();
+
+    $job = new class($project->id, (string) $project->processing_run_id) extends ProcessKaraokeProject
+    {
+        public ?int $releasedAfter = null;
+
+        public function release($delay = 0)
+        {
+            $this->releasedAfter = (int) $delay;
+
+            return $this;
+        }
+    };
+
+    $middleware = $job->middleware()[0];
+    $lock = Cache::lock($middleware->getLockKey($job), 360);
+
+    expect($lock->get())->toBeTrue();
+
+    $middleware->handle($job, fn () => null);
+
+    expect($job->releasedAfter)->toBe(5);
+
+    $lock->release();
+});
+
+it('retries transient processing failures before succeeding', function () {
+    $processor = new FlakyKaraokeProcessor(failuresBeforeSuccess: 2);
+    $user = processingUser();
+    $project = createUploadedProcessingProject($user);
+    $state = app(KaraokeProcessingStateService::class);
+
+    $state->queueForProcessing($project);
+    $project->refresh();
+    $runId = (string) $project->processing_run_id;
+    $job = new ProcessKaraokeProject($project->id, $runId);
+
+    expect(fn () => $job->handle($processor, $state))->toThrow(KaraokeProcessingException::class);
+    expect($project->fresh()->status)->toBe(KaraokeProjectStatus::Processing);
+    expect($processor->attempts)->toBe(1);
+
+    expect(fn () => $job->handle($processor, $state))->toThrow(KaraokeProcessingException::class);
+    expect($processor->attempts)->toBe(2);
+
+    $job->handle($processor, $state);
+
+    $project->refresh();
+    expect($project->status)->toBe(KaraokeProjectStatus::Completed)
+        ->and($processor->attempts)->toBe(3);
+});
+
+it('marks the active run failed only after retryable attempts are exhausted', function () {
+    $processor = new FlakyKaraokeProcessor(failuresBeforeSuccess: 99);
+    $user = processingUser();
+    $project = createUploadedProcessingProject($user);
+    $state = app(KaraokeProcessingStateService::class);
+
+    $state->queueForProcessing($project);
+    $project->refresh();
+    $runId = (string) $project->processing_run_id;
+    $job = new ProcessKaraokeProject($project->id, $runId);
+
+    foreach ([1, 2, 3] as $attempt) {
+        try {
+            $job->handle($processor, $state);
+        } catch (KaraokeProcessingException) {
+            expect($processor->attempts)->toBe($attempt);
+        }
+    }
+
+    expect($project->fresh()->status)->toBe(KaraokeProjectStatus::Processing);
+
+    $job->failed(new KaraokeProcessingException('Transient processing failure.'));
+
+    $project->refresh();
+    expect($project->status)->toBe(KaraokeProjectStatus::Failed)
+        ->and($project->error_code)->toBe('processing_failed');
+});
+
+it('forbids direct player access for uploaded projects with injected transcripts', function () {
+    $user = processingUser();
+    $project = createUploadedProcessingProject($user, [
+        'transcript' => json_decode(
+            (string) file_get_contents(database_path('fixtures/karoks-demo-transcript.json')),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        ),
+    ]);
+
+    $this->actingAs($user)
+        ->get(route('karaoke.projects.player', $project))
+        ->assertForbidden();
+});
+
+it('forbids direct editor access for uploaded projects with injected transcripts', function () {
+    $user = processingUser();
+    $project = createUploadedProcessingProject($user, [
+        'transcript' => json_decode(
+            (string) file_get_contents(database_path('fixtures/karoks-demo-transcript.json')),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        ),
+    ]);
+
+    $this->actingAs($user)
+        ->get(route('karaoke.projects.edit', $project))
+        ->assertForbidden();
+});
+
+it('forbids playback when a completed project is missing instrumental output', function () {
+    $user = processingUser();
+    $project = createUploadedProcessingProject($user);
+
+    app(KaraokeProcessingStateService::class)->queueForProcessing($project);
+    runProcessingJob($project->fresh());
+    $project->refresh();
+
+    Storage::disk('local')->delete($project->instrumental_path);
+
+    $this->actingAs($user)
+        ->get(route('karaoke.projects.player', $project))
+        ->assertForbidden();
 });
 
 it('preserves the original source file after processing', function () {

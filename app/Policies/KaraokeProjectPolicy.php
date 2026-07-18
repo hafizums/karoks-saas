@@ -31,22 +31,22 @@ class KaraokeProjectPolicy
 
     public function play(User $user, KaraokeProject $karaokeProject): bool
     {
-        return $this->owns($user, $karaokeProject);
+        return $this->owns($user, $karaokeProject) && $karaokeProject->isReadyForPlayback();
     }
 
     public function streamAudio(User $user, KaraokeProject $karaokeProject): bool
     {
-        return $this->owns($user, $karaokeProject);
+        return $this->owns($user, $karaokeProject) && $karaokeProject->playbackAudioPath() !== null;
     }
 
     public function edit(User $user, KaraokeProject $karaokeProject): bool
     {
-        return $this->owns($user, $karaokeProject);
+        return $this->owns($user, $karaokeProject) && $karaokeProject->isReadyForEditing();
     }
 
     public function update(User $user, KaraokeProject $karaokeProject): bool
     {
-        return $this->owns($user, $karaokeProject);
+        return $this->owns($user, $karaokeProject) && $karaokeProject->isReadyForEditing();
     }
 
     public function export(User $user, KaraokeProject $karaokeProject): bool

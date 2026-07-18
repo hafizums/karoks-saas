@@ -4,6 +4,7 @@ namespace App\Support\Karaoke\Processors;
 
 use App\Contracts\KaraokeProcessor;
 use App\Enums\KaraokeProcessingStage;
+use App\Exceptions\NonRetryableKaraokeProcessingException;
 use App\Models\KaraokeProject;
 use App\Rules\ValidKaraokeAudio;
 use App\Support\KaraokeProcessingProgress;
@@ -11,7 +12,6 @@ use App\Support\KaraokeProcessingResult;
 use App\Support\KaraokeStorage;
 use App\Support\KaraokeThemeParser;
 use Closure;
-use RuntimeException;
 
 class MockKaraokeProcessor implements KaraokeProcessor
 {
@@ -37,21 +37,21 @@ class MockKaraokeProcessor implements KaraokeProcessor
         $disk = KaraokeStorage::disk();
 
         if (! $project->source_path || ! $disk->exists($project->source_path)) {
-            throw new RuntimeException('Source audio is missing.');
+            throw new NonRetryableKaraokeProcessingException('source_missing');
         }
 
         $extension = ValidKaraokeAudio::safeExtensionFromMime($project->mime_type)
             ?? pathinfo($project->source_path, PATHINFO_EXTENSION);
 
         if (! is_string($extension) || $extension === '') {
-            throw new RuntimeException('Unable to determine a safe audio extension.');
+            throw new NonRetryableKaraokeProcessingException('unsupported_audio');
         }
 
         $instrumentalPath = $project->storageDirectory().'/instrumental.'.$extension;
         $sourceContents = $disk->get($project->source_path);
 
         if ($sourceContents === null) {
-            throw new RuntimeException('Unable to read source audio.');
+            throw new NonRetryableKaraokeProcessingException('source_missing');
         }
 
         $disk->put($instrumentalPath, $sourceContents);

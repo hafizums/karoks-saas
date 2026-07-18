@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\KaraokeProjectStatus;
 use App\Models\KaraokeProject;
 use App\Models\User;
 use App\Support\KaraokeProjectExporter;
@@ -36,7 +37,7 @@ function createEditableProject(User $user, array $attributes = []): KaraokeProje
 
     Storage::disk('local')->put($path, file_get_contents(base_path('tests/fixtures/sample.wav')));
 
-    return KaraokeProject::factory()->create(array_merge([
+    $project = KaraokeProject::factory()->create(array_merge([
         'user_id' => $user->id,
         'public_id' => $publicId,
         'source_path' => $path,
@@ -51,6 +52,23 @@ function createEditableProject(User $user, array $attributes = []): KaraokeProje
         ],
         'editor_revision' => 1,
     ], $attributes));
+
+    if (! array_key_exists('status', $attributes)) {
+        $instrumentalPath = $project->storageDirectory().'/instrumental.wav';
+        Storage::disk('local')->put($instrumentalPath, Storage::disk('local')->get($path));
+
+        $project->forceFill([
+            'status' => KaraokeProjectStatus::Completed,
+            'instrumental_path' => $instrumentalPath,
+            'instrumental_mime_type' => 'audio/wav',
+            'processing_stage' => 'completed',
+            'progress' => 100,
+        ])->save();
+
+        $project->refresh();
+    }
+
+    return $project;
 }
 
 function editorUpdatePayload(KaraokeProject $project, array $overrides = []): array
@@ -103,15 +121,35 @@ it('forbids other users from viewing or updating the editor', function () {
     $this->actingAs($other)->patchJson(route('karaoke.projects.update', $project), editorUpdatePayload($project))->assertForbidden();
 });
 
-it('shows unavailable state when transcript is missing', function () {
+it('forbids editor access when transcript is missing', function () {
     $user = createEditorUser();
-    $project = createEditableProject($user, ['transcript' => null]);
+    $project = createEditableProject($user, [
+        'transcript' => null,
+        'status' => KaraokeProjectStatus::Uploaded,
+    ]);
 
     $this->actingAs($user)
         ->get(route('karaoke.projects.edit', $project))
-        ->assertOk()
-        ->assertSee('Lyrics are not ready for editing')
-        ->assertDontSee('karoksEditor', false);
+        ->assertForbidden();
+});
+
+it('forbids editor access for uploaded projects with injected transcripts', function () {
+    $user = createEditorUser();
+    $project = createEditableProject($user, ['status' => KaraokeProjectStatus::Uploaded]);
+
+    $this->actingAs($user)
+        ->get(route('karaoke.projects.edit', $project))
+        ->assertForbidden();
+});
+
+it('forbids editor access when completed output is missing', function () {
+    $user = createEditorUser();
+    $project = createEditableProject($user);
+    Storage::disk('local')->delete($project->instrumental_path);
+
+    $this->actingAs($user)
+        ->get(route('karaoke.projects.edit', $project))
+        ->assertForbidden();
 });
 
 it('persists metadata updates', function () {
@@ -353,13 +391,16 @@ it('rejects empty word text on update', function () {
     ]))->assertStatus(422);
 });
 
-it('blocks update when transcript is unavailable', function () {
+it('forbids update when transcript is unavailable', function () {
     $user = createEditorUser();
-    $project = createEditableProject($user, ['transcript' => null]);
+    $project = createEditableProject($user, [
+        'transcript' => null,
+        'status' => KaraokeProjectStatus::Uploaded,
+    ]);
 
     $this->actingAs($user)->patchJson(route('karaoke.projects.update', $project), editorUpdatePayload($project, [
         'title' => 'Nope',
-    ]))->assertStatus(422);
+    ]))->assertForbidden();
 });
 
 it('preserves word ids and line ids through editor updates', function () {
