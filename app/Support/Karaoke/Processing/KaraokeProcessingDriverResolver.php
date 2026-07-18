@@ -25,6 +25,11 @@ class KaraokeProcessingDriverResolver
             return true;
         }
 
+        return $this->realProviderCredentialsConfigured();
+    }
+
+    public function realProviderCredentialsConfigured(): bool
+    {
         $wavespeedKey = trim((string) config('karoks.providers.wavespeed.api_key', ''));
         $elevenLabsKey = trim((string) config('karoks.providers.elevenlabs.api_key', ''));
 
@@ -55,5 +60,10 @@ class KaraokeProcessingDriverResolver
     public function requiresProviderConsent(): bool
     {
         return $this->isReal() && $this->realConfigured();
+    }
+
+    public function labelForDriver(string $driver): string
+    {
+        return strtolower(trim($driver)) === 'real' ? 'real' : 'simulated';
     }
 }

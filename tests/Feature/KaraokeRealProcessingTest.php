@@ -1,6 +1,5 @@
 <?php
 
-use App\Contracts\KaraokeProcessor;
 use App\Enums\KaraokeProjectStatus;
 use App\Exceptions\KaraokeProcessingGateException;
 use App\Exceptions\KaraokeProviderProcessingException;
@@ -28,6 +27,8 @@ use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Tests\Support\KaraokeTestTheme;
+
+use function Tests\Support\runKaraokeProcessingJob;
 
 uses(DatabaseTransactions::class);
 
@@ -95,6 +96,7 @@ function configureRealProcessing(array $overrides = []): void
     Config::set('karoks.providers.poll_timeout_seconds', 30);
     Config::set('karoks.providers.wavespeed.api_key', 'test-wavespeed-key');
     Config::set('karoks.providers.elevenlabs.api_key', 'test-elevenlabs-key');
+    Config::set('karoks.providers.allowed_media_host_suffixes', ['example.test']);
     Config::set('karoks.usage.default_monthly_limit', 100);
 
     foreach ($overrides as $key => $value) {
@@ -166,12 +168,7 @@ function fakeProviderHttp(string $vocalDownloadHost = 'cdn.example.test', string
 
 function runRealProcessingJob(KaraokeProject $project): void
 {
-    $project->refresh();
-
-    (new ProcessKaraokeProject($project->id, (string) $project->processing_run_id))->handle(
-        app(KaraokeProcessor::class),
-        app(KaraokeProcessingStateService::class),
-    );
+    runKaraokeProcessingJob($project);
 }
 
 beforeEach(function () {
@@ -317,7 +314,9 @@ it('completes real processing with correct provider request flow', function () {
         ->and($project->instrumental_path)->not->toBeNull()
         ->and(KaraokeStorage::disk()->exists($project->instrumental_path))->toBeTrue()
         ->and(KaraokeTranscriptParser::parse($project->transcript))->not->toBeNull()
-        ->and($project->wavespeed_prediction_id)->toBe('pred-test-123');
+        ->and($project->wavespeed_prediction_id)->toBeNull()
+        ->and($project->provider_transcript_checkpoint)->toBeNull()
+        ->and($project->processing_driver)->toBe('real');
 
     Http::assertSentCount(6);
 
@@ -368,7 +367,7 @@ it('marks non retryable auth failures immediately', function () {
         ->and(app(KaraokeProcessingStateService::class)->isRetryable($project))->toBeFalse();
 });
 
-it('does not submit wavespeed isolation twice on retry after separation', function () {
+it('submits a new isolation job after a terminal provider failure on manual retry', function () {
     configureRealProcessing();
     Http::preventStrayRequests();
 
@@ -377,8 +376,22 @@ it('does not submit wavespeed isolation twice on retry after separation', functi
     Http::fake(function (Request $request) use (&$isolatorCalls) {
         $url = $request->url();
 
+        if ($url === 'https://api.wavespeed.ai/api/v3/media/upload/binary') {
+            return Http::response(['data' => ['download_url' => 'https://uploads.example.test/source.wav']], 200);
+        }
+
         if ($url === 'https://api.wavespeed.ai/api/v3/wavespeed-ai/audio-vocal-isolator') {
             $isolatorCalls++;
+
+            return Http::response(['data' => ['id' => 'pred-retry-new']], 200);
+        }
+
+        if ($url === 'https://api.wavespeed.ai/api/v3/predictions/pred-retry-new/result') {
+            return Http::response([
+                'data' => [
+                    'status' => 'failed',
+                ],
+            ], 200);
         }
 
         if ($url === 'https://api.wavespeed.ai/api/v3/predictions/pred-retry-1/result') {
@@ -392,12 +405,38 @@ it('does not submit wavespeed isolation twice on retry after separation', functi
         return Http::response('unexpected', 500);
     });
 
-    $project = createRealProcessingProject(realProcessingUser(), [
-        'status' => KaraokeProjectStatus::Failed,
-        'wavespeed_prediction_id' => 'pred-retry-1',
-        'processing_driver' => 'real',
-        'processing_retryable' => true,
-    ]);
+    $project = createRealProcessingProject(realProcessingUser());
+    app(KaraokeProcessingStateService::class)->queueForProcessing($project, true);
+
+    try {
+        runRealProcessingJob($project->fresh());
+    } catch (KaraokeProviderProcessingException) {
+    }
+
+    expect($project->fresh()->wavespeed_prediction_failed_at)->not->toBeNull()
+        ->and($isolatorCalls)->toBe(1);
+
+    $isolatorCallsBeforeRetry = $isolatorCalls;
+
+    Http::fake(function (Request $request) use (&$isolatorCalls) {
+        $url = $request->url();
+
+        if ($url === 'https://api.wavespeed.ai/api/v3/wavespeed-ai/audio-vocal-isolator') {
+            $isolatorCalls++;
+
+            return Http::response(['data' => ['id' => 'pred-retry-second']], 200);
+        }
+
+        if ($url === 'https://api.wavespeed.ai/api/v3/predictions/pred-retry-new/result') {
+            return Http::response(['data' => ['status' => 'failed']], 200);
+        }
+
+        if ($url === 'https://api.wavespeed.ai/api/v3/media/upload/binary') {
+            return Http::response(['data' => ['download_url' => 'https://uploads.example.test/source.wav']], 200);
+        }
+
+        return Http::response('unexpected', 500);
+    });
 
     app(KaraokeProcessingStateService::class)->retryProcessing($project->fresh());
 
@@ -406,7 +445,7 @@ it('does not submit wavespeed isolation twice on retry after separation', functi
     } catch (KaraokeProviderProcessingException) {
     }
 
-    expect($isolatorCalls)->toBe(0);
+    expect($isolatorCalls - $isolatorCallsBeforeRetry)->toBeGreaterThanOrEqual(1);
 });
 
 it('does not expose provider secrets in status json', function () {
@@ -477,7 +516,13 @@ it('does not call elevenlabs twice when transcript checkpoint exists', function 
         return Http::response('unexpected', 500);
     });
 
-    $project = createRealProcessingProject(realProcessingUser(), [
+    $project = createRealProcessingProject(realProcessingUser());
+    $state = app(KaraokeProcessingStateService::class);
+    $state->queueForProcessing($project, true);
+    $project->refresh();
+    $state->beginProcessingRun($project, (string) $project->processing_run_id);
+
+    $project->forceFill([
         'status' => KaraokeProjectStatus::Failed,
         'wavespeed_prediction_id' => 'pred-transcript-1',
         'provider_separation_completed_at' => now(),
@@ -489,9 +534,10 @@ it('does not call elevenlabs twice when transcript checkpoint exists', function 
         ], 2.0, (string) Str::uuid()),
         'processing_driver' => 'real',
         'processing_retryable' => true,
-    ]);
+        'error_code' => 'processing_failed',
+    ])->save();
 
-    app(KaraokeProcessingStateService::class)->retryProcessing($project->fresh());
+    $state->retryProcessing($project->fresh());
     runRealProcessingJob($project->fresh());
 
     expect($elevenCalls)->toBe(0);
@@ -548,4 +594,308 @@ it('does not leak provider details in logs during failure', function () {
 
     Log::shouldNotHaveReceived('info');
     Log::shouldNotHaveReceived('debug');
+});
+
+it('uses the captured mock driver when global config switches to real after queue', function () {
+    Config::set('karoks.processing.driver', 'mock');
+    Http::preventStrayRequests();
+
+    $project = createRealProcessingProject(realProcessingUser());
+    app(KaraokeProcessingStateService::class)->queueForProcessing($project, false);
+
+    expect($project->fresh()->processing_driver)->toBe('mock');
+
+    configureRealProcessing();
+
+    runRealProcessingJob($project->fresh());
+
+    $project->refresh();
+
+    expect($project->status)->toBe(KaraokeProjectStatus::Completed)
+        ->and($project->processing_driver)->toBe('mock');
+
+    Http::assertNothingSent();
+});
+
+it('uses the captured real driver when global config switches to mock after queue', function () {
+    configureRealProcessing();
+    Http::preventStrayRequests();
+    fakeProviderHttp();
+
+    $project = createRealProcessingProject(realProcessingUser());
+    app(KaraokeProcessingStateService::class)->queueForProcessing($project, true);
+
+    expect($project->fresh()->processing_driver)->toBe('real');
+
+    Config::set('karoks.processing.driver', 'mock');
+
+    runRealProcessingJob($project->fresh());
+
+    expect($project->fresh()->status)->toBe(KaraokeProjectStatus::Completed)
+        ->and($project->fresh()->processing_driver)->toBe('real');
+
+    Http::assertSentCount(6);
+});
+
+it('blocks retry when switching from mock to real without provider consent', function () {
+    Config::set('karoks.processing.driver', 'mock');
+    $project = createRealProcessingProject(realProcessingUser(), [
+        'status' => KaraokeProjectStatus::Failed,
+        'processing_driver' => 'mock',
+        'processing_retryable' => true,
+        'error_code' => 'processing_failed',
+    ]);
+
+    configureRealProcessing();
+
+    expect(fn () => app(KaraokeProcessingStateService::class)->retryProcessing($project->fresh()))
+        ->toThrow(KaraokeProcessingGateException::class);
+});
+
+it('reports completed disclosure from the captured driver not global config', function () {
+    Config::set('karoks.processing.driver', 'mock');
+    Http::preventStrayRequests();
+
+    $user = realProcessingUser();
+    $project = createRealProcessingProject($user);
+    app(KaraokeProcessingStateService::class)->queueForProcessing($project, false);
+    runRealProcessingJob($project->fresh());
+
+    configureRealProcessing();
+
+    $payload = app(KaraokeProcessingStateService::class)->statusPayload($project->fresh(), $user);
+
+    expect($payload['simulated_processing'])->toBeTrue()
+        ->and($payload['processing_mode'])->toBe('simulated')
+        ->and($payload['captured_processing_driver'])->toBe('mock');
+});
+
+it('preserves provider error codes when queue attempts are exhausted', function () {
+    $user = realProcessingUser();
+    $project = createRealProcessingProject($user, [
+        'status' => KaraokeProjectStatus::Processing,
+        'processing_driver' => 'real',
+        'processing_run_id' => (string) Str::uuid(),
+    ]);
+
+    $job = new ProcessKaraokeProject($project->id, (string) $project->processing_run_id);
+    $job->failed(new KaraokeProviderProcessingException(
+        errorCode: 'provider_timeout',
+        userMessage: 'Processing timed out while waiting for the provider.',
+        queueRetryable: false,
+        manualRetryable: true,
+    ));
+
+    expect($project->fresh()->error_code)->toBe('provider_timeout');
+});
+
+it('distinguishes provider terminal timeout from application polling deadline', function () {
+    configureRealProcessing(['karoks.providers.poll_interval_seconds' => 1, 'karoks.providers.poll_timeout_seconds' => 2]);
+    Http::preventStrayRequests();
+
+    Http::fake([
+        'api.wavespeed.ai/api/v3/media/upload/binary' => Http::response(['data' => ['download_url' => 'https://uploads.example.test/source.wav']], 200),
+        'api.wavespeed.ai/api/v3/wavespeed-ai/audio-vocal-isolator' => Http::response(['data' => ['id' => 'pred-deadline']], 200),
+        'api.wavespeed.ai/api/v3/predictions/pred-deadline/result' => Http::response(['data' => ['status' => 'processing']], 200),
+    ]);
+
+    $project = createRealProcessingProject(realProcessingUser());
+    app(KaraokeProcessingStateService::class)->queueForProcessing($project, true);
+
+    try {
+        runRealProcessingJob($project->fresh());
+    } catch (KaraokeProviderProcessingException $exception) {
+        expect($exception->errorCode)->toBe('provider_timeout')
+            ->and($exception->queueRetryable)->toBeTrue();
+    }
+
+    expect($project->fresh()->wavespeed_prediction_failed_at)->toBeNull()
+        ->and($project->fresh()->status)->toBe(KaraokeProjectStatus::Processing);
+});
+
+it('invalidates separation checkpoints for provider terminal timeouts', function () {
+    configureRealProcessing();
+    Http::preventStrayRequests();
+
+    Http::fake([
+        'api.wavespeed.ai/api/v3/media/upload/binary' => Http::response(['data' => ['download_url' => 'https://uploads.example.test/source.wav']], 200),
+        'api.wavespeed.ai/api/v3/wavespeed-ai/audio-vocal-isolator' => Http::response(['data' => ['id' => 'pred-terminal']], 200),
+        'api.wavespeed.ai/api/v3/predictions/pred-terminal/result' => Http::response(['data' => ['status' => 'timeout']], 200),
+    ]);
+
+    $project = createRealProcessingProject(realProcessingUser());
+    app(KaraokeProcessingStateService::class)->queueForProcessing($project, true);
+
+    try {
+        runRealProcessingJob($project->fresh());
+    } catch (KaraokeProviderProcessingException $exception) {
+        expect($exception->errorCode)->toBe('provider_timeout')
+            ->and($exception->queueRetryable)->toBeFalse()
+            ->and($exception->invalidatesSeparationCheckpoint)->toBeTrue();
+    }
+
+    $project->refresh();
+
+    expect($project->status)->toBe(KaraokeProjectStatus::Failed)
+        ->and($project->error_code)->toBe('provider_timeout')
+        ->and($project->wavespeed_prediction_failed_at)->not->toBeNull();
+});
+
+it('does not queue retry ambiguous billable isolation post failures', function () {
+    configureRealProcessing();
+    Http::preventStrayRequests();
+
+    Http::fake([
+        'api.wavespeed.ai/api/v3/media/upload/binary' => Http::response(['data' => ['download_url' => 'https://uploads.example.test/source.wav']], 200),
+        'api.wavespeed.ai/api/v3/wavespeed-ai/audio-vocal-isolator' => Http::response(['message' => 'upstream'], 502),
+    ]);
+
+    $project = createRealProcessingProject(realProcessingUser());
+    app(KaraokeProcessingStateService::class)->queueForProcessing($project, true);
+
+    try {
+        runRealProcessingJob($project->fresh());
+    } catch (KaraokeProviderProcessingException $exception) {
+        expect($exception->queueRetryable)->toBeFalse()
+            ->and($exception->errorCode)->toBe('provider_failed');
+    }
+
+    expect($project->fresh()->status)->toBe(KaraokeProjectStatus::Failed);
+});
+
+it('rejects oversized content length before downloading provider media', function () {
+    configureRealProcessing(['karoks.providers.max_download_bytes' => 128]);
+    Http::preventStrayRequests();
+
+    Http::fake([
+        'https://cdn.example.test/vocal.mp3' => Http::response('ignored', 200, [
+            'Content-Type' => 'audio/mpeg',
+            'Content-Length' => '999999',
+        ]),
+    ]);
+
+    expect(fn () => app(SafeProviderMediaDownloader::class)->downloadToTemp(
+        'https://cdn.example.test/vocal.mp3',
+        storage_path('app/private/test-safe-download'),
+        'vocal',
+    ))->toThrow(KaraokeProviderProcessingException::class);
+});
+
+it('detects mime from file contents instead of response headers', function () {
+    configureRealProcessing();
+    Http::preventStrayRequests();
+
+    Http::fake([
+        'https://cdn.example.test/vocal.mp3' => Http::response('<html>not audio</html>', 200, [
+            'Content-Type' => 'audio/mpeg',
+        ]),
+    ]);
+
+    expect(fn () => app(SafeProviderMediaDownloader::class)->downloadToTemp(
+        'https://cdn.example.test/vocal.mp3',
+        storage_path('app/private/test-safe-download'),
+        'vocal',
+    ))->toThrow(KaraokeProviderProcessingException::class);
+});
+
+it('reapplies download protection on redirects', function () {
+    configureRealProcessing();
+    Http::preventStrayRequests();
+
+    Http::fake([
+        'https://cdn.example.test/vocal.mp3' => Http::response('', 302, ['Location' => 'http://insecure.example.test/vocal.mp3']),
+    ]);
+
+    expect(fn () => app(SafeProviderMediaDownloader::class)->downloadToTemp(
+        'https://cdn.example.test/vocal.mp3',
+        storage_path('app/private/test-safe-download'),
+        'vocal',
+    ))->toThrow(KaraokeProviderProcessingException::class);
+});
+
+it('does not persist completed output when instrumental storage fails', function () {
+    configureRealProcessing();
+
+    $processor = app(RealKaraokeProcessor::class);
+    $method = new ReflectionMethod(RealKaraokeProcessor::class, 'persistInstrumental');
+    $method->setAccessible(true);
+
+    $blockingPath = storage_path('app/private/karaoke-storage-blocker');
+    file_put_contents($blockingPath, 'blocks-directory');
+    $sourceFile = storage_path('app/private/karaoke-storage-source.wav');
+    file_put_contents($sourceFile, realProcessingWavBytes());
+
+    expect(fn () => $method->invoke(
+        $processor,
+        $blockingPath,
+        'karaoke/1/example/instrumental.mp3',
+        $sourceFile,
+    ))->toThrow(KaraokeProviderProcessingException::class);
+});
+
+it('forbids cross-user access to real processing status', function () {
+    configureRealProcessing();
+    $owner = realProcessingUser();
+    $other = realProcessingUser();
+    $project = createRealProcessingProject($owner);
+
+    $this->actingAs($other)
+        ->get(route('karaoke.projects.status', $project))
+        ->assertForbidden();
+});
+
+it('clears checkpoints after cancellation', function () {
+    configureRealProcessing();
+    $project = createRealProcessingProject(realProcessingUser(), [
+        'status' => KaraokeProjectStatus::Processing,
+        'processing_driver' => 'real',
+        'processing_run_id' => (string) Str::uuid(),
+        'wavespeed_prediction_id' => 'pred-cancel',
+        'provider_transcript_checkpoint' => ['version' => 1, 'lines' => []],
+    ]);
+
+    app(KaraokeProcessingStateService::class)->cancelProcessing($project->fresh());
+
+    $project->refresh();
+
+    expect($project->status)->toBe(KaraokeProjectStatus::Cancelled)
+        ->and($project->wavespeed_prediction_id)->toBeNull()
+        ->and($project->provider_transcript_checkpoint)->toBeNull();
+});
+
+it('does not submit isolation after cancellation between upload and isolation', function () {
+    configureRealProcessing();
+    Http::preventStrayRequests();
+
+    $isolatorCalls = 0;
+    $state = app(KaraokeProcessingStateService::class);
+    $project = createRealProcessingProject(realProcessingUser());
+    $state->queueForProcessing($project, true);
+    $project = $project->fresh();
+
+    Http::fake(function (Request $request) use (&$isolatorCalls, $state, $project) {
+        $url = $request->url();
+
+        if ($url === 'https://api.wavespeed.ai/api/v3/media/upload/binary') {
+            $state->cancelProcessing($project->fresh());
+
+            return Http::response(['data' => ['download_url' => 'https://uploads.example.test/source.wav']], 200);
+        }
+
+        if ($url === 'https://api.wavespeed.ai/api/v3/wavespeed-ai/audio-vocal-isolator') {
+            $isolatorCalls++;
+
+            return Http::response(['data' => ['id' => 'pred-cancelled']], 200);
+        }
+
+        return Http::response('unexpected', 500);
+    });
+
+    try {
+        runRealProcessingJob($project);
+    } catch (Throwable) {
+    }
+
+    expect($isolatorCalls)->toBe(0)
+        ->and($project->fresh()->status)->toBe(KaraokeProjectStatus::Cancelled);
 });

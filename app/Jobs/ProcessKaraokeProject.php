@@ -2,13 +2,13 @@
 
 namespace App\Jobs;
 
-use App\Contracts\KaraokeProcessor;
 use App\Exceptions\KaraokeProcessingException;
 use App\Exceptions\KaraokeProviderProcessingException;
 use App\Exceptions\NonRetryableKaraokeProcessingException;
 use App\Exceptions\ProcessingRunInterruptedException;
 use App\Models\KaraokeProject;
 use App\Support\KaraokeProcessingStateService;
+use App\Support\KaraokeProcessorManager;
 use App\Support\KaraokeStorage;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -73,10 +73,8 @@ class ProcessKaraokeProject implements ShouldQueue
         ];
     }
 
-    public function handle(
-        KaraokeProcessor $processor,
-        KaraokeProcessingStateService $stateService,
-    ): void {
+    public function handle(KaraokeProcessingStateService $stateService): void
+    {
         $project = KaraokeProject::query()->find($this->karaokeProjectId);
 
         if ($project === null) {
@@ -92,6 +90,9 @@ class ProcessKaraokeProject implements ShouldQueue
         }
 
         $project->refresh();
+
+        $driver = (string) ($project->processing_driver ?? 'mock');
+        $processor = app(KaraokeProcessorManager::class)->driver($driver);
 
         try {
             $result = $processor->process(

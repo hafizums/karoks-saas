@@ -26,6 +26,10 @@ return [
         'request_timeout_seconds' => (int) env('KAROKS_PROVIDER_REQUEST_TIMEOUT_SECONDS', 120),
         'max_download_bytes' => (int) env('KAROKS_PROVIDER_MAX_DOWNLOAD_BYTES', 52428800),
         'max_download_redirects' => (int) env('KAROKS_PROVIDER_MAX_DOWNLOAD_REDIRECTS', 3),
+        'allowed_media_host_suffixes' => array_values(array_filter(array_map(
+            static fn (string $suffix): string => trim($suffix),
+            explode(',', (string) env('KAROKS_PROVIDER_ALLOWED_MEDIA_HOST_SUFFIXES', 'wavespeed.ai,amazonaws.com,cloudfront.net')),
+        ))),
         'wavespeed' => [
             'api_key' => env('WAVESPEED_API_KEY'),
         ],

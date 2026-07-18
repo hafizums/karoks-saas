@@ -24,6 +24,8 @@ use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Tests\Support\FlakyKaraokeProcessor;
+use function Tests\Support\bindMockProcessingProcessor;
+use function Tests\Support\runKaraokeProcessingJob;
 use Tests\Support\KaraokeTestTheme;
 
 uses(DatabaseTransactions::class);
@@ -55,12 +57,7 @@ function createUploadedProcessingProject(User $user, array $attributes = []): Ka
 
 function runProcessingJob(KaraokeProject $project): void
 {
-    $project->refresh();
-
-    (new ProcessKaraokeProject($project->id, (string) $project->processing_run_id))->handle(
-        app(KaraokeProcessor::class),
-        app(KaraokeProcessingStateService::class),
-    );
+    runKaraokeProcessingJob($project);
 }
 
 beforeEach(function () {
@@ -393,14 +390,16 @@ it('retries transient processing failures before succeeding', function () {
     $runId = (string) $project->processing_run_id;
     $job = new ProcessKaraokeProject($project->id, $runId);
 
-    expect(fn () => $job->handle($processor, $state))->toThrow(KaraokeProcessingException::class);
+    bindMockProcessingProcessor($processor);
+
+    expect(fn () => $job->handle(app(KaraokeProcessingStateService::class)))->toThrow(KaraokeProcessingException::class);
     expect($project->fresh()->status)->toBe(KaraokeProjectStatus::Processing);
     expect($processor->attempts)->toBe(1);
 
-    expect(fn () => $job->handle($processor, $state))->toThrow(KaraokeProcessingException::class);
+    expect(fn () => $job->handle(app(KaraokeProcessingStateService::class)))->toThrow(KaraokeProcessingException::class);
     expect($processor->attempts)->toBe(2);
 
-    $job->handle($processor, $state);
+    $job->handle(app(KaraokeProcessingStateService::class));
 
     $project->refresh();
     expect($project->status)->toBe(KaraokeProjectStatus::Completed)
@@ -418,9 +417,11 @@ it('marks the active run failed only after retryable attempts are exhausted', fu
     $runId = (string) $project->processing_run_id;
     $job = new ProcessKaraokeProject($project->id, $runId);
 
+    bindMockProcessingProcessor($processor);
+
     foreach ([1, 2, 3] as $attempt) {
         try {
-            $job->handle($processor, $state);
+            $job->handle(app(KaraokeProcessingStateService::class));
         } catch (KaraokeProcessingException) {
             expect($processor->attempts)->toBe($attempt);
         }
@@ -659,7 +660,6 @@ it('exits safely when the project was deleted before the job runs', function () 
     $project->delete();
 
     (new ProcessKaraokeProject($projectId, $runId))->handle(
-        app(KaraokeProcessor::class),
         app(KaraokeProcessingStateService::class),
     );
 

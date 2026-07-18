@@ -14,9 +14,18 @@ class KaraokeProcessorManager
         $driver ??= (string) config('karoks.processing.driver', 'mock');
 
         return match ($driver) {
-            'mock' => app(MockKaraokeProcessor::class),
+            'mock' => $this->resolveMockDriver(),
             'real' => app(RealKaraokeProcessor::class),
             default => throw UnsupportedKaroksProcessingDriverException::forDriver($driver),
         };
+    }
+
+    private function resolveMockDriver(): KaraokeProcessor
+    {
+        if (app()->environment('testing') && app()->bound('karoks.testing.mock_processor')) {
+            return app('karoks.testing.mock_processor');
+        }
+
+        return app(MockKaraokeProcessor::class);
     }
 }

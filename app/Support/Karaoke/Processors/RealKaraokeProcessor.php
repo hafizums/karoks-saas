@@ -4,11 +4,14 @@ namespace App\Support\Karaoke\Processors;
 
 use App\Contracts\KaraokeProcessor;
 use App\Enums\KaraokeProcessingStage;
+use App\Exceptions\KaraokeProviderProcessingException;
 use App\Exceptions\NonRetryableKaraokeProcessingException;
+use App\Exceptions\ProcessingRunInterruptedException;
 use App\Models\KaraokeProject;
 use App\Rules\ValidKaraokeAudio;
 use App\Support\Karaoke\Processing\KaraokeProcessingCheckpointService;
-use App\Support\Karaoke\Processing\KaraokeProcessingDriverResolver;
+use App\Support\Karaoke\Processing\KaraokeProcessingGateService;
+use App\Support\Karaoke\Processing\KaraokeProcessingRunGuard;
 use App\Support\Karaoke\Providers\ElevenLabsClient;
 use App\Support\Karaoke\Providers\KaraokeProviderErrorMapper;
 use App\Support\Karaoke\Providers\KaraokeTranscriptNormalizer;
@@ -32,7 +35,8 @@ class RealKaraokeProcessor implements KaraokeProcessor
         private readonly KaraokeTranscriptNormalizer $normalizer,
         private readonly KaraokeProcessingCheckpointService $checkpoints,
         private readonly KaraokeProviderErrorMapper $errors,
-        private readonly KaraokeProcessingDriverResolver $driverResolver,
+        private readonly KaraokeProcessingGateService $gateService,
+        private readonly KaraokeProcessingRunGuard $runGuard,
     ) {}
 
     /**
@@ -40,9 +44,12 @@ class RealKaraokeProcessor implements KaraokeProcessor
      */
     public function process(KaraokeProject $project, string $processingRunId, Closure $reportProgress): KaraokeProcessingResult
     {
-        if (! $this->driverResolver->realConfigured()) {
-            throw $this->errors->notConfigured();
+        if ($project->processing_driver !== 'real') {
+            throw new NonRetryableKaraokeProcessingException('processing_failed');
         }
+
+        $this->gateService->assertRealExternalProcessingAllowed($project);
+        $this->runGuard->assertActive($project, $processingRunId);
 
         $disk = KaraokeStorage::disk();
 
@@ -67,18 +74,24 @@ class RealKaraokeProcessor implements KaraokeProcessor
         File::ensureDirectoryExists($tempDirectory);
 
         $vocalTempPath = null;
+        $instrumentalTempPath = null;
 
         try {
             $predictionId = $project->wavespeed_prediction_id;
 
             if (! $this->checkpoints->hasReusableSeparation($project)) {
                 $reportProgress(new KaraokeProcessingProgress(KaraokeProcessingStage::Separating, KaraokeProcessingStage::Separating->progress()));
+                $this->runGuard->assertActive($project, $processingRunId);
+                $this->gateService->assertRealExternalProcessingAllowed($project);
 
                 $uploadUrl = $this->waveSpeed->uploadSourceFile(
                     $sourceAbsolute,
                     basename($project->source_path),
                     $project->mime_type,
                 );
+
+                $this->runGuard->assertActive($project, $processingRunId);
+                $this->gateService->assertRealExternalProcessingAllowed($project);
 
                 $predictionId = $this->waveSpeed->submitVocalIsolation($uploadUrl);
                 $this->checkpoints->savePredictionId($project, $processingRunId, $predictionId);
@@ -89,7 +102,8 @@ class RealKaraokeProcessor implements KaraokeProcessor
 
             $outputs = $this->waveSpeed->pollUntilCompleted(
                 (string) $predictionId,
-                function () use ($reportProgress): void {
+                function () use ($reportProgress, $project, $processingRunId): void {
+                    $this->runGuard->assertActive($project, $processingRunId);
                     $reportProgress(new KaraokeProcessingProgress(
                         KaraokeProcessingStage::Separating,
                         max(KaraokeProcessingStage::Separating->progress(), 35),
@@ -97,6 +111,7 @@ class RealKaraokeProcessor implements KaraokeProcessor
                 },
             );
 
+            $this->runGuard->assertActive($project, $processingRunId);
             $this->checkpoints->markSeparationCompleted($project, $processingRunId);
             $project->refresh();
 
@@ -105,12 +120,18 @@ class RealKaraokeProcessor implements KaraokeProcessor
             $transcript = $this->checkpoints->reusableTranscript($project);
 
             if ($transcript === null) {
+                $this->runGuard->assertActive($project, $processingRunId);
+                $this->gateService->assertRealExternalProcessingAllowed($project);
+
                 $vocalDownload = $this->downloader->downloadToTemp(
                     $outputs['vocal_url'],
                     $tempDirectory,
                     'vocal',
                 );
                 $vocalTempPath = $vocalDownload['path'];
+
+                $this->runGuard->assertActive($project, $processingRunId);
+                $this->gateService->assertRealExternalProcessingAllowed($project);
 
                 $elevenResponse = $this->elevenLabs->transcribeVocalFile(
                     $vocalTempPath,
@@ -125,16 +146,19 @@ class RealKaraokeProcessor implements KaraokeProcessor
             }
 
             $reportProgress(new KaraokeProcessingProgress(KaraokeProcessingStage::Assembling, KaraokeProcessingStage::Assembling->progress()));
+            $this->runGuard->assertActive($project, $processingRunId);
 
             $instrumentalDownload = $this->downloader->downloadToTemp(
                 $outputs['instrumental_url'],
                 $tempDirectory,
                 'instrumental',
             );
+            $instrumentalTempPath = $instrumentalDownload['path'];
+
+            $this->runGuard->assertActive($project, $processingRunId);
 
             $instrumentalPath = $project->storageDirectory().'/instrumental.'.$instrumentalDownload['extension'];
-            $disk->put($instrumentalPath, fopen($instrumentalDownload['path'], 'rb'));
-            @unlink($instrumentalDownload['path']);
+            $this->persistInstrumental($disk->path(dirname($instrumentalPath)), $instrumentalPath, $instrumentalTempPath);
 
             $theme = KaraokeThemeParser::defaults();
 
@@ -148,14 +172,65 @@ class RealKaraokeProcessor implements KaraokeProcessor
                 disclosure: self::DISCLOSURE,
                 simulated: false,
             );
+        } catch (KaraokeProviderProcessingException $exception) {
+            if ($exception->invalidatesSeparationCheckpoint) {
+                $this->checkpoints->invalidateSeparationCheckpoint($project, $processingRunId);
+            }
+
+            throw $exception;
+        } catch (ProcessingRunInterruptedException $exception) {
+            throw $exception;
         } finally {
             if (is_string($vocalTempPath)) {
                 @unlink($vocalTempPath);
             }
 
+            if (is_string($instrumentalTempPath) && is_file($instrumentalTempPath)) {
+                @unlink($instrumentalTempPath);
+            }
+
             if (is_dir($tempDirectory)) {
                 File::deleteDirectory($tempDirectory);
             }
+        }
+    }
+
+    private function persistInstrumental(string $directory, string $relativePath, string $sourcePath): void
+    {
+        if (! is_dir($directory) && ! @mkdir($directory, 0700, true) && ! is_dir($directory)) {
+            throw $this->errors->storageFailed();
+        }
+
+        $absolutePath = KaraokeStorage::disk()->path($relativePath);
+        $input = fopen($sourcePath, 'rb');
+
+        if ($input === false) {
+            throw $this->errors->storageFailed();
+        }
+
+        $output = fopen($absolutePath, 'wb');
+
+        if ($output === false) {
+            fclose($input);
+
+            throw $this->errors->storageFailed();
+        }
+
+        try {
+            $copied = stream_copy_to_stream($input, $output);
+
+            if ($copied === false || $copied <= 0) {
+                throw $this->errors->storageFailed();
+            }
+        } finally {
+            fclose($input);
+            fclose($output);
+        }
+
+        if (! is_file($absolutePath) || filesize($absolutePath) <= 0) {
+            @unlink($absolutePath);
+
+            throw $this->errors->storageFailed();
         }
     }
 }

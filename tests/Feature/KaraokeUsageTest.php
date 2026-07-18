@@ -24,6 +24,8 @@ use Spatie\Permission\Models\Role;
 use Tests\Support\FlakyKaraokeProcessor;
 use Tests\Support\KaraokeTestTheme;
 use Tests\Support\NeverCalledKaraokeProcessor;
+use function Tests\Support\bindMockProcessingProcessor;
+use function Tests\Support\runKaraokeProcessingJob;
 use Wave\Plan;
 use Wave\Subscription;
 
@@ -92,12 +94,7 @@ function createPlanWithProcessingLimit(string $name, int $limit): Plan
 
 function runUsageProcessingJob(KaraokeProject $project): void
 {
-    $project->refresh();
-
-    (new ProcessKaraokeProject($project->id, (string) $project->processing_run_id))->handle(
-        app(KaraokeProcessor::class),
-        app(KaraokeProcessingStateService::class),
-    );
+    runKaraokeProcessingJob($project);
 }
 
 beforeEach(function () {
@@ -385,7 +382,7 @@ it('does not enter processing or invoke the processor when queued usage is missi
     KaraokeUsageRecord::query()->where('karaoke_project_id', $project->id)->delete();
 
     $job = new ProcessKaraokeProject($project->id, $runId);
-    $job->handle(new NeverCalledKaraokeProcessor(), $state);
+    $job->handle($state);
 
     $project->refresh();
 
@@ -415,7 +412,7 @@ it('does not enter processing or invoke the processor when retry usage is missin
     KaraokeUsageRecord::query()->where('karaoke_project_id', $project->id)->delete();
 
     $job = new ProcessKaraokeProject($project->id, $runId);
-    $job->handle(new NeverCalledKaraokeProcessor(), $state);
+    $job->handle($state);
 
     $project->refresh();
 
@@ -454,10 +451,12 @@ it('does not consume twice when retrying after a retryable failure', function ()
     $runId = (string) $project->processing_run_id;
     $job = new ProcessKaraokeProject($project->id, $runId);
 
-    expect(fn () => $job->handle($processor, $state))->toThrow(KaraokeProcessingException::class);
+    bindMockProcessingProcessor($processor);
+
+    expect(fn () => $job->handle($state))->toThrow(KaraokeProcessingException::class);
     expect(usageRecordsFor($user)->where('state', KaraokeUsageRecord::STATE_CONSUMED)->count())->toBe(1);
 
-    $job->handle($processor, $state);
+    $job->handle($state);
 
     expect(usageRecordsFor($user)->where('state', KaraokeUsageRecord::STATE_CONSUMED)->count())->toBe(1);
 
@@ -507,9 +506,11 @@ it('does not refund allowance after a processing failure', function () {
     $runId = (string) $project->processing_run_id;
     $job = new ProcessKaraokeProject($project->id, $runId);
 
+    bindMockProcessingProcessor($processor);
+
     foreach ([1, 2, 3] as $attempt) {
         try {
-            $job->handle($processor, $state);
+            $job->handle($state);
         } catch (KaraokeProcessingException) {
             expect($processor->attempts)->toBe($attempt);
         }

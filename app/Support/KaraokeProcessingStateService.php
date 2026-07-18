@@ -4,6 +4,7 @@ namespace App\Support;
 
 use App\Enums\KaraokeProcessingStage;
 use App\Enums\KaraokeProjectStatus;
+use App\Exceptions\KaraokeProviderProcessingException;
 use App\Jobs\ProcessKaraokeProject;
 use App\Models\KaraokeProject;
 use App\Models\User;
@@ -71,6 +72,7 @@ class KaraokeProcessingStateService
             $this->checkpointService->clearForFreshAttempt($locked);
             $locked->refresh();
 
+            $capturedDriver = $this->driverResolver->driverName();
             $attemptNumber = (int) $locked->processing_attempts + 1;
             $this->usageService->reserveForProject($locked->user, $locked, $attemptNumber);
 
@@ -78,6 +80,7 @@ class KaraokeProcessingStateService
 
             $locked->forceFill([
                 'status' => KaraokeProjectStatus::Queued,
+                'processing_driver' => $capturedDriver,
                 'processing_run_id' => $runId,
                 'processing_stage' => null,
                 'progress' => 0,
@@ -109,7 +112,6 @@ class KaraokeProcessingStateService
     public function retryProcessing(KaraokeProject $project): array
     {
         $this->usageService->assertProcessingEnabled();
-        $this->gateService->assertValidDuration($project);
 
         return DB::transaction(function () use ($project) {
             $locked = KaraokeProject::query()->whereKey($project->id)->lockForUpdate()->first();
@@ -126,11 +128,20 @@ class KaraokeProcessingStateService
                 throw new RuntimeException('Project cannot be retried from its current state.');
             }
 
+            $newDriver = $this->driverResolver->driverName();
+            $this->gateService->assertRetryDriverChange($locked, $newDriver);
+
+            if ($locked->processing_driver !== $newDriver || $locked->wavespeed_prediction_failed_at !== null) {
+                $this->checkpointService->clearForFreshAttempt($locked);
+                $locked->refresh();
+            }
+
             $runId = (string) Str::uuid();
             $nextAttempt = (int) $locked->processing_attempts + 1;
 
             $locked->forceFill([
                 'status' => KaraokeProjectStatus::Queued,
+                'processing_driver' => $newDriver,
                 'processing_run_id' => $runId,
                 'provider_checkpoint_run_id' => $runId,
                 'provider_checkpoint_attempt' => $nextAttempt,
@@ -186,6 +197,7 @@ class KaraokeProcessingStateService
                 $this->usageService->releaseQueuedForProject($locked, 'cancelled');
             }
 
+            $this->checkpointService->clearAfterCancellation($locked);
             $this->removePartialInstrumental($locked);
 
             return true;
@@ -282,6 +294,12 @@ class KaraokeProcessingStateService
                 return false;
             }
 
+            if (! KaraokeStorage::disk()->exists($result->instrumentalPath)) {
+                $this->removeInstrumentalAtPath($result->instrumentalPath);
+
+                return false;
+            }
+
             $locked->forceFill([
                 'status' => KaraokeProjectStatus::Completed,
                 'processing_stage' => KaraokeProcessingStage::Completed->value,
@@ -294,6 +312,8 @@ class KaraokeProcessingStateService
                 'error_code' => null,
                 'error_message' => $result->disclosure,
             ])->save();
+
+            $this->checkpointService->clearAfterCompletion($locked, $runId);
 
             return true;
         });
@@ -337,6 +357,16 @@ class KaraokeProcessingStateService
 
     public function markJobFailed(KaraokeProject $project, string $runId, Throwable $exception): bool
     {
+        if ($exception instanceof KaraokeProviderProcessingException) {
+            return $this->markFailed(
+                $project,
+                $runId,
+                $exception->errorCode,
+                $exception->userMessage,
+                retryable: $exception->manualRetryable,
+            );
+        }
+
         return $this->markFailed(
             $project,
             $runId,
@@ -403,6 +433,16 @@ class KaraokeProcessingStateService
             'can_edit' => $project->isReadyForEditing(),
         ];
 
+        $pendingDriver = $this->driverResolver->driverName();
+        $resultDriver = $project->processing_driver;
+        $isCompleted = $project->status === KaraokeProjectStatus::Completed;
+        $simulatedProcessing = $isCompleted
+            ? (($resultDriver ?? 'mock') === 'mock')
+            : ($pendingDriver === 'mock');
+        $processingMode = $isCompleted
+            ? $this->driverResolver->labelForDriver((string) ($resultDriver ?? 'mock'))
+            : $this->driverResolver->userFacingModeLabel();
+
         return [
             'status' => $project->status->value,
             'stage' => $project->processing_stage,
@@ -414,11 +454,13 @@ class KaraokeProcessingStateService
             'error_code' => $project->error_code,
             'error_message' => $project->error_message,
             'updated_at' => $project->updated_at?->toIso8601String(),
-            'processing_mode' => $this->driverResolver->userFacingModeLabel(),
-            'simulated_processing' => $this->driverResolver->isMock(),
+            'processing_mode' => $processingMode,
+            'simulated_processing' => $simulatedProcessing,
             'real_processing_available' => $realAvailable,
-            'requires_provider_consent' => $this->driverResolver->requiresProviderConsent(),
+            'requires_provider_consent' => $canProcessBase && $pendingDriver === 'real' && $this->driverResolver->realProviderCredentialsConfigured(),
             'provider_consent_confirmed' => $project->provider_consent_confirmed_at !== null,
+            'captured_processing_driver' => $resultDriver,
+            'pending_processing_driver' => $pendingDriver,
             'capabilities' => $capabilities,
             'usage' => $usage,
             'processing_enabled' => $this->usageService->processingEnabled(),

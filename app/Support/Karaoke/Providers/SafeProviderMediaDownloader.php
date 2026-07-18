@@ -2,6 +2,9 @@
 
 namespace App\Support\Karaoke\Providers;
 
+use App\Exceptions\KaraokeProviderProcessingException;
+use App\Rules\ValidKaraokeAudio;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 
@@ -18,7 +21,6 @@ class SafeProviderMediaDownloader
         'audio/m4a',
         'audio/flac',
         'audio/x-flac',
-        'application/octet-stream',
     ];
 
     /**
@@ -34,18 +36,19 @@ class SafeProviderMediaDownloader
         $requestTimeout = max(1, (int) config('karoks.providers.request_timeout_seconds', 120));
 
         if (! is_dir($tempDirectory) && ! mkdir($tempDirectory, 0700, true) && ! is_dir($tempDirectory)) {
-            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput();
+            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput(false);
         }
 
         $tempPath = $tempDirectory.'/'.$filenamePrefix.'-'.Str::uuid().'.part';
         $currentUrl = $url;
         $redirects = 0;
+        $response = null;
 
         while (true) {
             $this->assertSafeUrl($currentUrl);
 
             $response = Http::withOptions([
-                'sink' => $tempPath,
+                'stream' => true,
                 'allow_redirects' => false,
                 'connect_timeout' => $connectTimeout,
                 'timeout' => $requestTimeout,
@@ -56,13 +59,13 @@ class SafeProviderMediaDownloader
                 $redirects++;
 
                 if ($redirects > $maxRedirects) {
-                    throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput();
+                    throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput(false);
                 }
 
                 $location = $response->header('Location');
 
                 if (! is_string($location) || $location === '') {
-                    throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput();
+                    throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput(false);
                 }
 
                 $currentUrl = $this->resolveRedirectUrl($currentUrl, $location);
@@ -78,42 +81,30 @@ class SafeProviderMediaDownloader
                 );
             }
 
+            $this->assertContentLengthWithinLimit($response, $maxBytes);
+            $this->streamResponseToFile($response, $tempPath, $maxBytes);
+
             break;
         }
 
         if (! is_file($tempPath)) {
-            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput();
+            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput(false);
         }
 
-        $size = filesize($tempPath);
+        $detectedMime = $this->detectMimeType($tempPath);
 
-        if ($size === false || $size <= 0 || $size > $maxBytes) {
+        if ($detectedMime === null || ! in_array($detectedMime, self::ALLOWED_AUDIO_MIMES, true)) {
             @unlink($tempPath);
 
-            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput();
+            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput(false);
         }
 
-        $mimeType = strtolower(trim((string) $response->header('Content-Type')));
-        $mimeType = explode(';', $mimeType)[0];
+        $extension = ValidKaraokeAudio::safeExtensionFromMime($detectedMime);
 
-        if (! in_array($mimeType, self::ALLOWED_AUDIO_MIMES, true)) {
+        if ($extension === null) {
             @unlink($tempPath);
 
-            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput();
-        }
-
-        $extension = match ($mimeType) {
-            'audio/mpeg', 'audio/mp3' => 'mp3',
-            'audio/wav', 'audio/x-wav', 'audio/wave' => 'wav',
-            'audio/mp4', 'audio/x-m4a', 'audio/m4a' => 'm4a',
-            'audio/flac', 'audio/x-flac' => 'flac',
-            default => 'bin',
-        };
-
-        if ($extension === 'bin') {
-            @unlink($tempPath);
-
-            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput();
+            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput(false);
         }
 
         $finalPath = $tempDirectory.'/'.$filenamePrefix.'-'.Str::uuid().'.'.$extension;
@@ -121,12 +112,12 @@ class SafeProviderMediaDownloader
         if (! rename($tempPath, $finalPath)) {
             @unlink($tempPath);
 
-            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput();
+            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput(false);
         }
 
         return [
             'path' => $finalPath,
-            'mime_type' => $mimeType === 'application/octet-stream' ? 'audio/mpeg' : $mimeType,
+            'mime_type' => $detectedMime,
             'extension' => $extension,
         ];
     }
@@ -136,7 +127,7 @@ class SafeProviderMediaDownloader
         $parsed = parse_url($url);
 
         if ($parsed === false) {
-            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput();
+            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput(false);
         }
 
         $scheme = strtolower((string) ($parsed['scheme'] ?? ''));
@@ -144,52 +135,180 @@ class SafeProviderMediaDownloader
         $port = $parsed['port'] ?? null;
 
         if ($scheme !== 'https' || $host === '') {
-            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput();
+            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput(false);
         }
 
         if (isset($parsed['user']) || isset($parsed['pass'])) {
-            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput();
+            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput(false);
         }
 
         if ($port !== null && ! in_array((int) $port, [443], true)) {
-            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput();
+            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput(false);
         }
 
         if ($host === 'localhost' || str_ends_with($host, '.local') || str_ends_with($host, '.internal')) {
-            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput();
+            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput(false);
+        }
+
+        if (! $this->hostAllowed($host)) {
+            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput(false);
         }
 
         if (filter_var($host, FILTER_VALIDATE_IP)) {
             if (! $this->isPublicIp($host)) {
-                throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput();
+                throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput(false);
             }
 
             return;
         }
 
-        $records = @dns_get_record($host, DNS_A + DNS_AAAA);
+        $this->assertResolvablePublicHost($host);
+    }
 
-        if (is_array($records)) {
-            foreach ($records as $record) {
-                $ip = $record['ip'] ?? $record['ipv6'] ?? null;
+    private function hostAllowed(string $host): bool
+    {
+        $suffixes = config('karoks.providers.allowed_media_host_suffixes', []);
 
-                if (is_string($ip) && ! $this->isPublicIp($ip)) {
-                    throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput();
-                }
+        if (! is_array($suffixes) || $suffixes === []) {
+            return false;
+        }
+
+        foreach ($suffixes as $suffix) {
+            if (! is_string($suffix) || $suffix === '') {
+                continue;
+            }
+
+            $normalized = strtolower($suffix);
+
+            if ($host === $normalized || str_ends_with($host, '.'.$normalized)) {
+                return true;
             }
         }
+
+        return false;
+    }
+
+    private function assertResolvablePublicHost(string $host): void
+    {
+        $records = @dns_get_record($host, DNS_A + DNS_AAAA);
+
+        if (! is_array($records) || $records === []) {
+            if (app()->environment('testing') && str_ends_with($host, '.test')) {
+                return;
+            }
+
+            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput(false);
+        }
+
+        $hasPublic = false;
+
+        foreach ($records as $record) {
+            $ip = $record['ip'] ?? $record['ipv6'] ?? null;
+
+            if (is_string($ip) && $this->isPublicIp($ip)) {
+                $hasPublic = true;
+
+                continue;
+            }
+
+            if (is_string($ip) && ! $this->isPublicIp($ip)) {
+                throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput(false);
+            }
+        }
+
+        if (! $hasPublic) {
+            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput(false);
+        }
+    }
+
+    private function assertContentLengthWithinLimit(Response $response, int $maxBytes): void
+    {
+        $contentLength = trim((string) $response->header('Content-Length'));
+
+        if ($contentLength !== '' && ctype_digit($contentLength) && (int) $contentLength > $maxBytes) {
+            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput(false);
+        }
+    }
+
+    private function streamResponseToFile(Response $response, string $tempPath, int $maxBytes): void
+    {
+        $stream = $response->toPsrResponse()->getBody();
+        $handle = fopen($tempPath, 'wb');
+
+        if ($handle === false) {
+            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput(false);
+        }
+
+        $written = 0;
+
+        try {
+            while (! $stream->eof()) {
+                $chunk = $stream->read(8192);
+
+                if ($chunk === '') {
+                    break;
+                }
+
+                $written += strlen($chunk);
+
+                if ($written > $maxBytes) {
+                    throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput(false);
+                }
+
+                $bytes = fwrite($handle, $chunk);
+
+                if ($bytes === false) {
+                    throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput(false);
+                }
+            }
+        } catch (\Throwable $exception) {
+            fclose($handle);
+            @unlink($tempPath);
+
+            if ($exception instanceof KaraokeProviderProcessingException) {
+                throw $exception;
+            }
+
+            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput(false);
+        }
+
+        fclose($handle);
+
+        if ($written <= 0) {
+            @unlink($tempPath);
+
+            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput(false);
+        }
+    }
+
+    private function detectMimeType(string $path): ?string
+    {
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+
+        if ($finfo === false) {
+            return null;
+        }
+
+        $mime = finfo_file($finfo, $path);
+        finfo_close($finfo);
+
+        if (! is_string($mime) || $mime === '') {
+            return null;
+        }
+
+        return strtolower(explode(';', $mime)[0]);
     }
 
     private function resolveRedirectUrl(string $currentUrl, string $location): string
     {
-        if (str_starts_with($location, 'https://')) {
+        if (str_starts_with($location, 'https://') || str_starts_with($location, 'http://')) {
             return $location;
         }
 
         $base = parse_url($currentUrl);
 
         if ($base === false) {
-            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput();
+            throw app(KaraokeProviderErrorMapper::class)->invalidProviderOutput(false);
         }
 
         if (str_starts_with($location, '/')) {

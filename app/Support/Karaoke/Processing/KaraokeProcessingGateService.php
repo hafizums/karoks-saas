@@ -15,30 +15,63 @@ class KaraokeProcessingGateService
 
     public function assertCanQueue(KaraokeProject $project, bool $providerConsentAccepted): void
     {
-        if ($this->driverResolver->isReal()) {
-            if (! $this->driverResolver->realConfigured()) {
-                throw new KaraokeProcessingGateException(
-                    'provider_not_configured',
-                    'Real processing is unavailable because provider configuration is incomplete.',
-                );
-            }
+        $this->assertRealRequirementsForDriver($this->driverResolver->driverName(), $project, $providerConsentAccepted);
+    }
 
-            if (! $providerConsentAccepted && $project->provider_consent_confirmed_at === null) {
-                throw new KaraokeProcessingGateException(
-                    'provider_consent_required',
-                    'Provider consent is required before real processing can start.',
-                );
-            }
+    public function assertRetryDriverChange(KaraokeProject $project, string $newDriver): void
+    {
+        $previousDriver = $project->processing_driver;
 
+        if ($previousDriver !== null && $previousDriver !== $newDriver) {
+            if ($newDriver === 'real') {
+                $this->assertRealRequirementsForDriver('real', $project, false);
+            }
+        } elseif ($newDriver === 'real') {
+            $this->assertRealRequirementsForDriver('real', $project, false);
+        }
+
+        if ($newDriver === 'real') {
             $this->assertValidDuration($project);
         }
     }
 
-    public function assertValidDuration(KaraokeProject $project): void
+    public function assertRealExternalProcessingAllowed(KaraokeProject $project): void
     {
-        if (! $this->driverResolver->isReal()) {
+        if ($project->processing_driver !== 'real') {
+            throw new KaraokeProcessingGateException(
+                'processing_failed',
+                'Processing cannot contact external providers for this run.',
+            );
+        }
+
+        $this->assertRealRequirementsForDriver('real', $project, false);
+    }
+
+    private function assertRealRequirementsForDriver(string $driver, KaraokeProject $project, bool $providerConsentAccepted): void
+    {
+        if ($driver !== 'real') {
             return;
         }
+
+        if (! $this->driverResolver->realProviderCredentialsConfigured()) {
+            throw new KaraokeProcessingGateException(
+                'provider_not_configured',
+                'Real processing is unavailable because provider configuration is incomplete.',
+            );
+        }
+
+        if (! $providerConsentAccepted && $project->provider_consent_confirmed_at === null) {
+            throw new KaraokeProcessingGateException(
+                'provider_consent_required',
+                'Provider consent is required before real processing can start.',
+            );
+        }
+
+        $this->assertValidDuration($project);
+    }
+
+    public function assertValidDuration(KaraokeProject $project): void
+    {
         if (! $project->source_path) {
             throw new KaraokeProcessingGateException('source_missing', 'The uploaded source audio could not be found.');
         }

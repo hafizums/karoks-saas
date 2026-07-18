@@ -52,7 +52,7 @@ class WaveSpeedClient
         $url = $this->extractUploadUrl($body);
 
         if ($url === null) {
-            throw $this->errors->invalidProviderOutput();
+            throw $this->errors->invalidProviderOutput(false);
         }
 
         return $url;
@@ -75,7 +75,7 @@ class WaveSpeedClient
         $predictionId = is_string($data['id'] ?? null) ? $data['id'] : null;
 
         if ($predictionId === null || $predictionId === '') {
-            throw $this->errors->invalidProviderOutput();
+            throw $this->errors->invalidProviderOutput(true);
         }
 
         return $predictionId;
@@ -99,7 +99,7 @@ class WaveSpeedClient
         $status = is_string($data['status'] ?? null) ? strtolower($data['status']) : '';
 
         if (! in_array($status, array_merge(self::ACTIVE_STATUSES, ['completed'], self::TERMINAL_FAILURE_STATUSES), true)) {
-            throw $this->errors->invalidProviderOutput();
+            throw $this->errors->invalidProviderOutput(true);
         }
 
         if ($status !== 'completed') {
@@ -136,7 +136,7 @@ class WaveSpeedClient
 
             if ($status['status'] === 'completed') {
                 if ($status['vocal_url'] === null || $status['instrumental_url'] === null) {
-                    throw $this->errors->invalidProviderOutput();
+                    throw $this->errors->invalidProviderOutput(true);
                 }
 
                 return [
@@ -146,15 +146,13 @@ class WaveSpeedClient
             }
 
             if (in_array($status['status'], self::TERMINAL_FAILURE_STATUSES, true)) {
-                throw $status['status'] === 'timeout'
-                    ? $this->errors->providerTimeout()
-                    : $this->errors->providerFailed();
+                throw $this->errors->providerTerminalFailure($status['status']);
             }
 
             sleep($interval);
         }
 
-        throw $this->errors->providerTimeout();
+        throw $this->errors->providerPollingDeadlineExceeded();
     }
 
     /**
@@ -163,14 +161,14 @@ class WaveSpeedClient
     private function parseOutputs(mixed $outputs): array
     {
         if (! is_array($outputs) || count($outputs) !== 2) {
-            throw $this->errors->invalidProviderOutput();
+            throw $this->errors->invalidProviderOutput(true);
         }
 
         $vocalUrl = $outputs[0] ?? null;
         $instrumentalUrl = $outputs[1] ?? null;
 
         if (! $this->isHttpsUrl($vocalUrl) || ! $this->isHttpsUrl($instrumentalUrl)) {
-            throw $this->errors->invalidProviderOutput();
+            throw $this->errors->invalidProviderOutput(true);
         }
 
         return [
@@ -218,13 +216,13 @@ class WaveSpeedClient
         $raw = $response->body();
 
         if (strlen($raw) > self::MAX_RESPONSE_BYTES) {
-            throw $this->errors->invalidProviderOutput();
+            throw $this->errors->invalidProviderOutput(false);
         }
 
         $decoded = json_decode($raw, true);
 
         if (! is_array($decoded)) {
-            throw $this->errors->invalidProviderOutput();
+            throw $this->errors->invalidProviderOutput(false);
         }
 
         return $decoded;

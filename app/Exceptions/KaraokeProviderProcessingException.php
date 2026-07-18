@@ -9,6 +9,7 @@ class KaraokeProviderProcessingException extends KaraokeProcessingException
         public readonly string $userMessage,
         public readonly bool $queueRetryable,
         public readonly bool $manualRetryable = true,
+        public readonly bool $invalidatesSeparationCheckpoint = false,
     ) {
         parent::__construct($errorCode);
     }

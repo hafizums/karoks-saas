@@ -10,11 +10,11 @@ class KaraokeProcessingCheckpointService
     public function clearForFreshAttempt(KaraokeProject $project): void
     {
         $project->forceFill([
-            'processing_driver' => null,
             'provider_checkpoint_run_id' => null,
             'provider_checkpoint_attempt' => null,
             'wavespeed_prediction_id' => null,
             'provider_separation_completed_at' => null,
+            'wavespeed_prediction_failed_at' => null,
             'provider_transcript_checkpoint' => null,
         ])->save();
     }
@@ -39,6 +39,7 @@ class KaraokeProcessingCheckpointService
 
             $locked->forceFill([
                 'wavespeed_prediction_id' => $predictionId,
+                'wavespeed_prediction_failed_at' => null,
             ])->save();
         });
     }
@@ -54,6 +55,7 @@ class KaraokeProcessingCheckpointService
 
             $locked->forceFill([
                 'provider_separation_completed_at' => now(),
+                'wavespeed_prediction_failed_at' => null,
             ])->save();
         });
     }
@@ -76,10 +78,60 @@ class KaraokeProcessingCheckpointService
         });
     }
 
+    public function invalidateSeparationCheckpoint(KaraokeProject $project, string $runId): void
+    {
+        DB::transaction(function () use ($project, $runId): void {
+            $locked = KaraokeProject::query()->whereKey($project->id)->lockForUpdate()->first();
+
+            if ($locked === null || ! $this->checkpointMatches($locked, $runId)) {
+                return;
+            }
+
+            $locked->forceFill([
+                'wavespeed_prediction_id' => null,
+                'provider_separation_completed_at' => null,
+                'wavespeed_prediction_failed_at' => now(),
+            ])->save();
+        });
+    }
+
+    public function clearAfterCompletion(KaraokeProject $project, string $runId): void
+    {
+        DB::transaction(function () use ($project, $runId): void {
+            $locked = KaraokeProject::query()->whereKey($project->id)->lockForUpdate()->first();
+
+            if ($locked === null || ! $this->checkpointMatches($locked, $runId)) {
+                return;
+            }
+
+            $locked->forceFill([
+                'provider_checkpoint_run_id' => null,
+                'provider_checkpoint_attempt' => null,
+                'wavespeed_prediction_id' => null,
+                'provider_separation_completed_at' => null,
+                'wavespeed_prediction_failed_at' => null,
+                'provider_transcript_checkpoint' => null,
+            ])->save();
+        });
+    }
+
+    public function clearAfterCancellation(KaraokeProject $project): void
+    {
+        $project->forceFill([
+            'provider_checkpoint_run_id' => null,
+            'provider_checkpoint_attempt' => null,
+            'wavespeed_prediction_id' => null,
+            'provider_separation_completed_at' => null,
+            'wavespeed_prediction_failed_at' => null,
+            'provider_transcript_checkpoint' => null,
+        ])->save();
+    }
+
     public function hasReusableSeparation(KaraokeProject $project): bool
     {
         return is_string($project->wavespeed_prediction_id)
-            && $project->wavespeed_prediction_id !== '';
+            && $project->wavespeed_prediction_id !== ''
+            && $project->wavespeed_prediction_failed_at === null;
     }
 
     /**
