@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\KaraokeProjectStatus;
 use App\Support\KaraokeStorage;
+use App\Support\KaraokeTranscriptParser;
 use Database\Factories\KaraokeProjectFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -67,6 +68,19 @@ class KaraokeProject extends Model
     public function storageDirectory(): string
     {
         return 'karaoke/'.$this->user_id.'/'.$this->public_id;
+    }
+
+    /**
+     * @return array{version: int, lines: list<array{id: string, start: float, end: float, words: list<array{id: string, text: string, start: float, end: float}>}>}|null
+     */
+    public function parsedTranscript(): ?array
+    {
+        return KaraokeTranscriptParser::parse($this->transcript);
+    }
+
+    public function hasPlayableTranscript(): bool
+    {
+        return $this->parsedTranscript() !== null;
     }
 
     protected static function booted(): void

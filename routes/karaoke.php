@@ -11,6 +11,8 @@ Route::middleware('auth')
         Route::get('/create', [KaraokeProjectController::class, 'create'])->name('create');
         Route::post('/', [KaraokeProjectController::class, 'store'])->name('store');
         Route::get('/{karaokeProject}', [KaraokeProjectController::class, 'show'])->name('show');
+        Route::get('/{karaokeProject}/player', [KaraokeProjectController::class, 'player'])->name('player');
+        Route::match(['get', 'head'], '/{karaokeProject}/audio', [KaraokeProjectController::class, 'audio'])->name('audio');
         Route::get('/{karaokeProject}/source', [KaraokeProjectController::class, 'source'])->name('source');
         Route::delete('/{karaokeProject}', [KaraokeProjectController::class, 'destroy'])->name('destroy');
     });

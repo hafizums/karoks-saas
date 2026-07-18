@@ -3,7 +3,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build"
+    "build": "vite build",
+    "test:karoks-player": "node --test tests/js/karoks-player.test.js"
   },
   "devDependencies": {
     "@tailwindcss/forms": "^0.5.10",

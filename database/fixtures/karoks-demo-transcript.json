@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "lines": [
+    {
+      "id": "line-1",
+      "start": 0.5,
+      "end": 4.2,
+      "words": [
+        { "id": "word-1", "text": "Sing", "start": 0.5, "end": 1.1 },
+        { "id": "word-2", "text": "along", "start": 1.1, "end": 1.9 },
+        { "id": "word-3", "text": "with", "start": 1.9, "end": 2.4 },
+        { "id": "word-4", "text": "this", "start": 2.4, "end": 2.9 },
+        { "id": "word-5", "text": "demo", "start": 2.9, "end": 4.2 }
+      ]
+    },
+    {
+      "id": "line-2",
+      "start": 4.8,
+      "end": 8.6,
+      "words": [
+        { "id": "word-6", "text": "Words", "start": 4.8, "end": 5.4 },
+        { "id": "word-7", "text": "light", "start": 5.4, "end": 6.0 },
+        { "id": "word-8", "text": "up", "start": 6.0, "end": 6.4 },
+        { "id": "word-9", "text": "as", "start": 6.4, "end": 6.8 },
+        { "id": "word-10", "text": "you", "start": 6.8, "end": 7.2 },
+        { "id": "word-11", "text": "go", "start": 7.2, "end": 8.6 }
+      ]
+    },
+    {
+      "id": "line-3",
+      "start": 9.2,
+      "end": 13.0,
+      "words": [
+        { "id": "word-12", "text": "Feel", "start": 9.2, "end": 9.7 },
+        { "id": "word-13", "text": "the", "start": 9.7, "end": 10.0 },
+        { "id": "word-14", "text": "rhythm", "start": 10.0, "end": 10.8 },
+        { "id": "word-15", "text": "take", "start": 10.8, "end": 11.3 },
+        { "id": "word-16", "text": "the", "start": 11.3, "end": 11.6 },
+        { "id": "word-17", "text": "lead", "start": 11.6, "end": 13.0 }
+      ]
+    },
+    {
+      "id": "line-4",
+      "start": 13.6,
+      "end": 17.4,
+      "words": [
+        { "id": "word-18", "text": "Hold", "start": 13.6, "end": 14.1 },
+        { "id": "word-19", "text": "each", "start": 14.1, "end": 14.6 },
+        { "id": "word-20", "text": "note", "start": 14.6, "end": 15.2 },
+        { "id": "word-21", "text": "until", "start": 15.2, "end": 16.0 },
+        { "id": "word-22", "text": "you", "start": 16.0, "end": 16.4 },
+        { "id": "word-23", "text": "breathe", "start": 16.4, "end": 17.4 }
+      ]
+    },
+    {
+      "id": "line-5",
+      "start": 18.0,
+      "end": 22.0,
+      "words": [
+        { "id": "word-24", "text": "This", "start": 18.0, "end": 18.5 },
+        { "id": "word-25", "text": "is", "start": 18.5, "end": 18.8 },
+        { "id": "word-26", "text": "only", "start": 18.8, "end": 19.5 },
+        { "id": "word-27", "text": "a", "start": 19.5, "end": 19.7 },
+        { "id": "word-28", "text": "practice", "start": 19.7, "end": 20.7 },
+        { "id": "word-29", "text": "track", "start": 20.7, "end": 22.0 }
+      ]
+    },
+    {
+      "id": "line-6",
+      "start": 22.6,
+      "end": 26.5,
+      "words": [
+        { "id": "word-30", "text": "Add", "start": 22.6, "end": 23.0 },
+        { "id": "word-31", "text": "your", "start": 23.0, "end": 23.4 },
+        { "id": "word-32", "text": "own", "start": 23.4, "end": 23.8 },
+        { "id": "word-33", "text": "audio", "start": 23.8, "end": 24.6 },
+        { "id": "word-34", "text": "when", "start": 24.6, "end": 25.0 },
+        { "id": "word-35", "text": "ready", "start": 25.0, "end": 26.5 }
+      ]
+    }
+  ]
+}

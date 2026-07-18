@@ -6,12 +6,17 @@ use App\Enums\KaraokeProjectStatus;
 use App\Http\Requests\StoreKaraokeProjectRequest;
 use App\Models\KaraokeProject;
 use App\Rules\ValidKaraokeAudio;
+use App\Support\KaraokeAudioStreamService;
+use App\Support\KaraokeThemeParser;
+use App\Support\KaraokeTranscriptParser;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\View\View;
+use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class KaraokeProjectController extends Controller
@@ -104,7 +109,38 @@ class KaraokeProjectController extends Controller
 
         return view('theme::karaoke.show', [
             'project' => $karaokeProject,
+            'hasPlayableTranscript' => $karaokeProject->hasPlayableTranscript(),
         ]);
+    }
+
+    public function player(KaraokeProject $karaokeProject): View
+    {
+        $this->authorize('play', $karaokeProject);
+
+        $transcript = KaraokeTranscriptParser::parse($karaokeProject->transcript);
+        $theme = KaraokeThemeParser::parse($karaokeProject->theme);
+
+        return view('theme::karaoke.player', [
+            'project' => $karaokeProject,
+            'transcript' => $transcript,
+            'theme' => $theme,
+            'themeCssVars' => KaraokeThemeParser::cssVariables($theme),
+            'audioUrl' => route('karaoke.projects.audio', $karaokeProject),
+        ]);
+    }
+
+    public function audio(
+        Request $request,
+        KaraokeProject $karaokeProject,
+        KaraokeAudioStreamService $audioStreamService,
+    ): Response {
+        $this->authorize('streamAudio', $karaokeProject);
+
+        return $audioStreamService->respond(
+            $karaokeProject,
+            $request->header('Range'),
+            $request->isMethod('HEAD'),
+        );
     }
 
     public function source(KaraokeProject $karaokeProject): StreamedResponse

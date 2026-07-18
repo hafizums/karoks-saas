@@ -51,10 +51,27 @@
         </div>
 
         <div class="p-4 mt-6 text-sm border rounded-lg border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100">
-            Processing, synchronized lyrics, and playback will arrive in later phases. Your source audio is stored privately on the server.
+            @if ($hasPlayableTranscript)
+                Your synchronized lyrics are ready. Open the player to sing along with private streaming audio.
+            @else
+                Lyrics are not ready yet. Upload processing and transcript generation will arrive in a later phase.
+            @endif
         </div>
 
         <div class="flex flex-wrap items-center gap-3 mt-8">
+            @if ($hasPlayableTranscript)
+                <a
+                    href="{{ route('karaoke.projects.player', $project) }}"
+                    wire:navigate
+                    class="inline-flex items-center justify-center px-4 py-2 text-sm font-medium text-white rounded-lg bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+                >
+                    Open karaoke player
+                </a>
+            @else
+                <span class="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-lg cursor-not-allowed bg-zinc-200 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400" title="Lyrics are not ready">
+                    Karaoke player unavailable
+                </span>
+            @endif
             <a
                 href="{{ route('karaoke.projects.source', $project) }}"
                 class="inline-flex items-center justify-center px-4 py-2 text-sm font-medium text-white rounded-lg bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"

@@ -27,6 +27,16 @@ class KaraokeProjectPolicy
         return $this->owns($user, $karaokeProject);
     }
 
+    public function play(User $user, KaraokeProject $karaokeProject): bool
+    {
+        return $this->owns($user, $karaokeProject);
+    }
+
+    public function streamAudio(User $user, KaraokeProject $karaokeProject): bool
+    {
+        return $this->owns($user, $karaokeProject);
+    }
+
     public function delete(User $user, KaraokeProject $karaokeProject): bool
     {
         return $this->owns($user, $karaokeProject);
