@@ -44,6 +44,7 @@ export function registerKaroksEditor(Alpine) {
     _beforeUnloadHandler: null,
     _livewireNavigateHandler: null,
     _initialized: false,
+    _editGeneration: 0,
 
     get themeStyle() {
       const vars = themeToCssVars(this.theme);
@@ -137,6 +138,7 @@ export function registerKaroksEditor(Alpine) {
     },
 
     markDirtyAndSchedule() {
+      this._editGeneration += 1;
       this._saveController?.scheduleSave();
     },
 
@@ -213,7 +215,14 @@ export function registerKaroksEditor(Alpine) {
       return payload;
     },
 
+    hasUnsavedDraftChanges() {
+      const payload = this.buildPayload();
+      return Object.keys(payload).length > 1;
+    },
+
     async performSave() {
+      const saveGeneration = this._editGeneration;
+
       const response = await fetch(this.updateUrl, {
         method: 'PATCH',
         headers: {
@@ -236,8 +245,37 @@ export function registerKaroksEditor(Alpine) {
         throw new Error(data.message ?? 'Save failed');
       }
 
-      this.applyServerState(data);
-      return data;
+      this.applySaveResponse(data, saveGeneration);
+
+      return {
+        stillDirty: this._editGeneration !== saveGeneration || this.hasUnsavedDraftChanges(),
+      };
+    },
+
+    applySaveResponse(data, saveGeneration) {
+      this.revision = data.revision;
+      this.savedSnapshot = {
+        revision: data.revision,
+        title: data.title,
+        artist: data.artist ?? '',
+        theme: parseTheme(data.theme),
+        lines: cloneLines(data.lines ?? []),
+      };
+
+      if (this._editGeneration !== saveGeneration) {
+        return;
+      }
+
+      this.title = data.title;
+      this.artist = data.artist ?? '';
+      this.theme = parseTheme(data.theme);
+      this.lines = cloneLines(data.lines ?? []);
+      this.colorDraft.baseColor = this.theme.baseColor;
+      this.colorDraft.highlightColor = this.theme.highlightColor;
+      this.syncPreview();
+      this._saveController?.applyServerState();
+      this.importError = '';
+      this.conflictState = null;
     },
 
     applyServerState(state) {
@@ -270,6 +308,7 @@ export function registerKaroksEditor(Alpine) {
     },
 
     resetUnsaved() {
+      this._editGeneration += 1;
       this.applyServerState(this.savedSnapshot);
     },
 
@@ -331,6 +370,7 @@ export function registerKaroksEditor(Alpine) {
 
         if (response.status === 409) {
           this.saveState = SAVE_STATES.CONFLICT;
+          this.conflictState = data.state ?? null;
           this.importError = data.message ?? 'Version conflict.';
           return;
         }

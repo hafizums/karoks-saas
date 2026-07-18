@@ -63,24 +63,67 @@ describe('createEditorSaveController', () => {
     controller.destroy();
   });
 
-  it('queues another save while one is active', async () => {
-    let saves = 0;
-    const controller = createEditorSaveController({
-      debounceMs: 5,
-      performSave: async () => {
-        saves += 1;
-        await new Promise((resolve) => setTimeout(resolve, 20));
-        return { revision: saves + 1 };
-      },
-      onStateChange: () => {},
+  it('serializes follow-up save after in-flight edit without losing newest draft', async () => {
+    let resolveSaveA;
+    const saveAGate = new Promise((resolve) => {
+      resolveSaveA = resolve;
     });
 
+    let revision = 1;
+    let title = 'Original';
+    let editGeneration = 0;
+    let savedTitle = 'Original';
+    const requests = [];
+
+    const performSave = async () => {
+      const saveGeneration = editGeneration;
+      requests.push({ revision, title, saveGeneration });
+
+      if (requests.length === 1) {
+        await saveAGate;
+      }
+
+      revision += 1;
+      savedTitle = requests.at(-1).title;
+
+      const stillDirty = editGeneration !== saveGeneration || title !== savedTitle;
+      if (!stillDirty) {
+        title = savedTitle;
+      }
+
+      return { stillDirty };
+    };
+
+    let state = SAVE_STATES.SAVED;
+    const controller = createEditorSaveController({
+      debounceMs: 5,
+      performSave,
+      onStateChange: (next) => {
+        state = next;
+      },
+    });
+
+    editGeneration += 1;
     controller.scheduleSave();
-    const first = controller.flushSave(true);
+    const saveA = controller.flushSave(true);
+
+    editGeneration += 1;
+    title = 'Newest';
     controller.scheduleSave();
-    await first;
-    await new Promise((resolve) => setTimeout(resolve, 40));
-    assert.ok(saves >= 1);
+
+    resolveSaveA();
+    await saveA;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].title, 'Original');
+    assert.equal(requests[0].revision, 1);
+    assert.equal(requests[1].title, 'Newest');
+    assert.equal(requests[1].revision, 2);
+    assert.equal(title, 'Newest');
+    assert.equal(state, SAVE_STATES.SAVED);
+    assert.equal(controller.dirty, false);
+
     controller.destroy();
   });
 

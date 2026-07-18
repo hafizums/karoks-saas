@@ -75,6 +75,12 @@ export function createEditorSaveController(options) {
           return result;
         }
 
+        if (result?.stillDirty) {
+          dirty = true;
+          setState(SAVE_STATES.UNSAVED);
+          return result;
+        }
+
         markSaved();
         return result;
       })
@@ -85,11 +91,12 @@ export function createEditorSaveController(options) {
       })
       .finally(() => {
         activeSave = null;
-        if (queuedAfterSave) {
-          queuedAfterSave = false;
-          if (dirty) {
-            void flushSave();
-          }
+        const needsFollowUp = (queuedAfterSave || dirty)
+          && saveState !== SAVE_STATES.CONFLICT
+          && saveState !== SAVE_STATES.FAILED;
+        queuedAfterSave = false;
+        if (needsFollowUp && dirty) {
+          void flushSave();
         }
       });
 
