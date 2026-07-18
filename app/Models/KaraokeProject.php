@@ -33,6 +33,7 @@ class KaraokeProject extends Model
         'provider_consent_confirmed_at',
         'transcript',
         'theme',
+        'editor_revision',
         'error_code',
         'error_message',
     ];
@@ -52,6 +53,7 @@ class KaraokeProject extends Model
             'provider_consent_confirmed_at' => 'datetime',
             'transcript' => 'array',
             'theme' => 'array',
+            'editor_revision' => 'integer',
         ];
     }
 
@@ -81,6 +83,11 @@ class KaraokeProject extends Model
     public function hasPlayableTranscript(): bool
     {
         return $this->parsedTranscript() !== null;
+    }
+
+    public function hasEditableTranscript(): bool
+    {
+        return $this->hasPlayableTranscript();
     }
 
     protected static function booted(): void

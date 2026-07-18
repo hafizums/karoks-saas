@@ -372,5 +372,17 @@ export function registerKaroksPlayer(Alpine) {
       if (!line?.words) return '';
       return line.words.map((word) => word.text).join(' ');
     },
+
+    replaceLines(lines) {
+      this.lines = lines ?? [];
+      this._applyView(this.currentTime, this.duration);
+    },
+
+    getPlaybackSnapshot() {
+      return {
+        currentTime: this.currentTime,
+        isPlaying: this.isPlaying,
+      };
+    },
   }));
 }

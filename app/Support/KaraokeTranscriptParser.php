@@ -8,6 +8,14 @@ class KaraokeTranscriptParser
 {
     public const SUPPORTED_VERSION = 1;
 
+    public const MAX_LINES = 500;
+
+    public const MAX_WORDS_TOTAL = 5000;
+
+    public const MAX_ID_LENGTH = 100;
+
+    public const MAX_WORD_TEXT_LENGTH = 200;
+
     /**
      * @return array{version: int, lines: list<array{id: string, start: float, end: float, words: list<array{id: string, text: string, start: float, end: float}>}>}|null
      */
@@ -54,6 +62,10 @@ class KaraokeTranscriptParser
             return null;
         }
 
+        if (count($rawLines) > self::MAX_LINES) {
+            return null;
+        }
+
         $lines = [];
         $lineIds = [];
         $wordIds = [];
@@ -63,7 +75,7 @@ class KaraokeTranscriptParser
                 return null;
             }
 
-            $lineId = self::requireString($rawLine['id'] ?? null, 'line id');
+            $lineId = self::requireId($rawLine['id'] ?? null, 'line id');
             if (isset($lineIds[$lineId])) {
                 return null;
             }
@@ -88,6 +100,10 @@ class KaraokeTranscriptParser
             ];
         }
 
+        if (count($wordIds) > self::MAX_WORDS_TOTAL) {
+            return null;
+        }
+
         return $lines;
     }
 
@@ -108,13 +124,13 @@ class KaraokeTranscriptParser
                 return null;
             }
 
-            $wordId = self::requireString($rawWord['id'] ?? null, 'word id');
+            $wordId = self::requireId($rawWord['id'] ?? null, 'word id');
             if (isset($wordIds[$wordId])) {
                 return null;
             }
             $wordIds[$wordId] = true;
 
-            $text = self::requireString($rawWord['text'] ?? null, 'word text');
+            $text = self::requireWordText($rawWord['text'] ?? null);
             $wordStart = self::requireTime($rawWord['start'] ?? null, 'word start');
             $wordEnd = self::requireTime($rawWord['end'] ?? null, 'word end');
 
@@ -139,10 +155,27 @@ class KaraokeTranscriptParser
         return $words;
     }
 
-    private static function requireString(mixed $value, string $label): string
+    private static function requireId(mixed $value, string $label): string
     {
         if (! is_string($value) || trim($value) === '') {
             throw new InvalidArgumentException("Invalid {$label}.");
+        }
+
+        if (strlen($value) > self::MAX_ID_LENGTH) {
+            throw new InvalidArgumentException("Invalid {$label}.");
+        }
+
+        return $value;
+    }
+
+    private static function requireWordText(mixed $value): string
+    {
+        if (! is_string($value) || trim($value) === '') {
+            throw new InvalidArgumentException('Invalid word text.');
+        }
+
+        if (strlen($value) > self::MAX_WORD_TEXT_LENGTH) {
+            throw new InvalidArgumentException('Invalid word text.');
         }
 
         return $value;

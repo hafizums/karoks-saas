@@ -37,6 +37,26 @@ class KaraokeProjectPolicy
         return $this->owns($user, $karaokeProject);
     }
 
+    public function edit(User $user, KaraokeProject $karaokeProject): bool
+    {
+        return $this->owns($user, $karaokeProject);
+    }
+
+    public function update(User $user, KaraokeProject $karaokeProject): bool
+    {
+        return $this->owns($user, $karaokeProject);
+    }
+
+    public function export(User $user, KaraokeProject $karaokeProject): bool
+    {
+        return $this->owns($user, $karaokeProject);
+    }
+
+    public function import(User $user, KaraokeProject $karaokeProject): bool
+    {
+        return $this->owns($user, $karaokeProject);
+    }
+
     public function delete(User $user, KaraokeProject $karaokeProject): bool
     {
         return $this->owns($user, $karaokeProject);

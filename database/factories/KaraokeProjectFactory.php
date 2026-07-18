@@ -38,6 +38,7 @@ class KaraokeProjectFactory extends Factory
             'provider_consent_confirmed_at' => null,
             'transcript' => null,
             'theme' => null,
+            'editor_revision' => 1,
             'error_code' => null,
             'error_message' => null,
         ];

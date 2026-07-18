@@ -30,6 +30,32 @@ class KaraokeThemeParser
     /**
      * @return array{backgroundPreset: string, lyricSize: string, baseColor: string, highlightColor: string}
      */
+    public static function parseStrict(mixed $input): array
+    {
+        if (! is_array($input)) {
+            throw new \InvalidArgumentException('Theme must be an object.');
+        }
+
+        $backgroundPreset = self::parseBackgroundPreset($input['backgroundPreset'] ?? null);
+        $lyricSize = self::parseLyricSize($input['lyricSize'] ?? null);
+        $baseColor = self::sanitizeHexColor($input['baseColor'] ?? null);
+        $highlightColor = self::sanitizeHexColor($input['highlightColor'] ?? null);
+
+        if ($backgroundPreset === null || $lyricSize === null || $baseColor === null || $highlightColor === null) {
+            throw new \InvalidArgumentException('Theme values are invalid.');
+        }
+
+        return [
+            'backgroundPreset' => $backgroundPreset,
+            'lyricSize' => $lyricSize,
+            'baseColor' => $baseColor,
+            'highlightColor' => $highlightColor,
+        ];
+    }
+
+    /**
+     * @return array{backgroundPreset: string, lyricSize: string, baseColor: string, highlightColor: string}
+     */
     public static function defaults(): array
     {
         return [

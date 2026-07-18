@@ -1,7 +1,9 @@
 import { registerKaroksPlayer } from './karoks/player.js';
+import { registerKaroksEditor } from './karoks/editor.js';
 
 document.addEventListener('alpine:init', () => {
   registerKaroksPlayer(window.Alpine);
+  registerKaroksEditor(window.Alpine);
 });
 
 window.demoButtonClickMessage = function (event) {
