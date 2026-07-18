@@ -13,9 +13,25 @@ return [
     'processing' => [
         'enabled' => filter_var(env('KAROKS_PROCESSING_ENABLED', true), FILTER_VALIDATE_BOOL),
         'driver' => env('KAROKS_PROCESSING_DRIVER', 'mock'),
+        'max_audio_duration_seconds' => (int) env('KAROKS_MAX_AUDIO_DURATION_SECONDS', 720),
         'mock_stage_delay_ms' => (int) env('KAROKS_MOCK_STAGE_DELAY_MS', 0),
         'overlap_release_after_seconds' => (int) env('KAROKS_PROCESSING_OVERLAP_RELEASE_SECONDS', 5),
         'overlap_expire_after_seconds' => (int) env('KAROKS_PROCESSING_OVERLAP_EXPIRE_SECONDS', 360),
+    ],
+
+    'providers' => [
+        'poll_interval_seconds' => (int) env('KAROKS_PROVIDER_POLL_INTERVAL_SECONDS', 2),
+        'poll_timeout_seconds' => (int) env('KAROKS_PROVIDER_POLL_TIMEOUT_SECONDS', 600),
+        'connect_timeout_seconds' => (int) env('KAROKS_PROVIDER_CONNECT_TIMEOUT_SECONDS', 10),
+        'request_timeout_seconds' => (int) env('KAROKS_PROVIDER_REQUEST_TIMEOUT_SECONDS', 120),
+        'max_download_bytes' => (int) env('KAROKS_PROVIDER_MAX_DOWNLOAD_BYTES', 52428800),
+        'max_download_redirects' => (int) env('KAROKS_PROVIDER_MAX_DOWNLOAD_REDIRECTS', 3),
+        'wavespeed' => [
+            'api_key' => env('WAVESPEED_API_KEY'),
+        ],
+        'elevenlabs' => [
+            'api_key' => env('ELEVENLABS_API_KEY'),
+        ],
     ],
 
     /*

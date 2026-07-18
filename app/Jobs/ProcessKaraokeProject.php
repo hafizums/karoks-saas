@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Contracts\KaraokeProcessor;
 use App\Exceptions\KaraokeProcessingException;
+use App\Exceptions\KaraokeProviderProcessingException;
 use App\Exceptions\NonRetryableKaraokeProcessingException;
 use App\Exceptions\ProcessingRunInterruptedException;
 use App\Models\KaraokeProject;
@@ -26,7 +27,7 @@ class ProcessKaraokeProject implements ShouldQueue
 
     public int $maxExceptions = 3;
 
-    public int $timeout = 300;
+    public int $timeout;
 
     /**
      * @return array<int, int>
@@ -41,6 +42,7 @@ class ProcessKaraokeProject implements ShouldQueue
         $seconds = max(
             $this->timeout + 60,
             (int) config('karoks.processing.overlap_expire_after_seconds', 360),
+            (int) config('karoks.providers.poll_timeout_seconds', 600) + 120,
         );
 
         return now()->addSeconds($seconds);
@@ -49,7 +51,12 @@ class ProcessKaraokeProject implements ShouldQueue
     public function __construct(
         public int $karaokeProjectId,
         public string $processingRunId,
-    ) {}
+    ) {
+        $this->timeout = max(
+            300,
+            (int) config('karoks.providers.poll_timeout_seconds', 600) + 180,
+        );
+    }
 
     /**
      * @return array<int, object>
@@ -119,6 +126,22 @@ class ProcessKaraokeProject implements ShouldQueue
             }
         } catch (ProcessingRunInterruptedException) {
             return;
+        } catch (KaraokeProviderProcessingException $exception) {
+            if ($exception->queueRetryable) {
+                throw $exception;
+            }
+
+            $fresh = KaraokeProject::query()->find($project->id);
+
+            if ($fresh !== null) {
+                $stateService->markFailed(
+                    $fresh,
+                    $this->processingRunId,
+                    $exception->errorCode,
+                    $exception->userMessage,
+                    retryable: $exception->manualRetryable,
+                );
+            }
         } catch (NonRetryableKaraokeProcessingException $exception) {
             $fresh = KaraokeProject::query()->find($project->id);
 

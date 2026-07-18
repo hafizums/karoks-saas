@@ -4,7 +4,9 @@ namespace App\Http\Controllers;
 
 use App\Enums\KaraokeProjectStatus;
 use App\Exceptions\KaraokeProcessingDisabledException;
+use App\Exceptions\KaraokeProcessingGateException;
 use App\Exceptions\KaraokeUsageLimitExceededException;
+use App\Http\Requests\StartKaraokeProcessingRequest;
 use App\Models\KaraokeProject;
 use App\Support\KaraokeProcessingStateService;
 use Illuminate\Http\JsonResponse;
@@ -13,7 +15,7 @@ use RuntimeException;
 
 class KaraokeProjectProcessingController extends Controller
 {
-    public function process(KaraokeProject $karaokeProject, KaraokeProcessingStateService $stateService): RedirectResponse|JsonResponse
+    public function process(StartKaraokeProcessingRequest $request, KaraokeProject $karaokeProject, KaraokeProcessingStateService $stateService): RedirectResponse|JsonResponse
     {
         $this->authorize('process', $karaokeProject);
 
@@ -28,11 +30,15 @@ class KaraokeProjectProcessingController extends Controller
         }
 
         try {
-            $stateService->queueForProcessing($karaokeProject);
+            $stateService->queueForProcessing($karaokeProject, $request->providerConsentAccepted());
         } catch (KaraokeProcessingDisabledException) {
             return redirect()
                 ->route('karaoke.projects.show', $karaokeProject)
                 ->withErrors(['processing' => 'Processing is temporarily unavailable. Please try again later.']);
+        } catch (KaraokeProcessingGateException $exception) {
+            return redirect()
+                ->route('karaoke.projects.show', $karaokeProject)
+                ->withErrors(['processing' => $exception->getMessage()]);
         } catch (KaraokeUsageLimitExceededException) {
             return redirect()
                 ->route('karaoke.projects.show', $karaokeProject)

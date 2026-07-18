@@ -31,6 +31,12 @@
                 </div>
             @enderror
 
+            @error('provider_consent')
+                <div class="p-4 text-sm text-red-800 bg-red-50 border border-red-200 rounded-lg dark:bg-red-950/30 dark:text-red-100 dark:border-red-900/60" role="alert">
+                    {{ $message }}
+                </div>
+            @enderror
+
             @include('theme::karaoke.partials.usage-summary')
 
             <div class="p-6 space-y-4 border rounded-xl border-zinc-200 dark:border-zinc-700">
@@ -63,10 +69,24 @@
                 </dl>
             </div>
 
-            <template x-if="isUploaded || isCancelled">
+            <template x-if="(isUploaded || isCancelled) && status.simulated_processing">
                 <div class="p-4 text-sm border rounded-lg border-sky-200 bg-sky-50 text-sky-950 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-100">
-                    <p class="font-medium">Phase 4 development mock</p>
-                    <p class="mt-2">Processing uses a local mock only. It copies your upload for playback and generates generic placeholder lyrics. No vocal removal or real transcription is performed.</p>
+                    <p class="font-medium">Simulated processing</p>
+                    <p class="mt-2">Processing runs locally on this server using a development mock. Your upload is copied for playback and generic placeholder lyrics are generated. No external provider is contacted.</p>
+                </div>
+            </template>
+
+            <template x-if="(isUploaded || isCancelled) && status.requires_provider_consent">
+                <div class="p-4 text-sm border rounded-lg border-violet-200 bg-violet-50 text-violet-950 dark:border-violet-900/60 dark:bg-violet-950/30 dark:text-violet-100">
+                    <p class="font-medium">Real processing disclosure</p>
+                    <p class="mt-2">Starting processing sends your source audio to WaveSpeed for vocal separation, then sends the isolated vocal track to ElevenLabs Scribe for transcription. Instrumental and transcript results are stored privately in your account.</p>
+                </div>
+            </template>
+
+            <template x-if="(isUploaded || isCancelled) && status.processing_mode === 'unavailable'">
+                <div class="p-4 text-sm border rounded-lg border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100" role="alert">
+                    <p class="font-medium">Real processing unavailable</p>
+                    <p class="mt-2">Real provider processing is not configured on this server. Processing cannot be started until configuration is complete.</p>
                 </div>
             </template>
 
@@ -114,19 +134,48 @@
             <template x-if="isCancelled">
                 <div class="p-4 text-sm border rounded-lg border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100">
                     <p class="font-medium">Processing cancelled</p>
-                    <p class="mt-2">This run was cancelled before completion. You can start a fresh mock processing attempt when ready.</p>
+                    <p class="mt-2">This run was cancelled before completion. You can start a fresh processing attempt when ready.</p>
                 </div>
             </template>
 
-            <template x-if="isCompleted">
+            <template x-if="isCompleted && status.simulated_processing">
                 <div class="p-4 text-sm border rounded-lg border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100" role="status">
-                    <p class="font-medium">Development mock result</p>
+                    <p class="font-medium">Simulated result</p>
                     <p class="mt-2">{{ \App\Support\Karaoke\Processors\MockKaraokeSyntheticTranscript::DISCLOSURE }}</p>
                 </div>
             </template>
 
+            <template x-if="isCompleted && !status.simulated_processing">
+                <div class="p-4 text-sm border rounded-lg border-emerald-200 bg-emerald-50 text-emerald-950 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-100" role="status">
+                    <p class="font-medium">Real processing result</p>
+                    <p class="mt-2">{{ \App\Support\Karaoke\Processors\RealKaraokeProcessor::DISCLOSURE }}</p>
+                </div>
+            </template>
+
             <div class="flex flex-wrap items-center gap-3">
-                <template x-if="canProcess">
+                <template x-if="canProcess && status.requires_provider_consent && !status.provider_consent_confirmed">
+                    <form method="POST" :action="status.routes.process" class="w-full max-w-xl space-y-3">
+                        @csrf
+                        <label class="flex items-start gap-3 text-sm text-zinc-700 dark:text-zinc-200">
+                            <input
+                                type="checkbox"
+                                name="provider_consent"
+                                value="1"
+                                class="mt-1 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-500 dark:border-zinc-600 dark:bg-zinc-900"
+                                required
+                            />
+                            <span>I consent to sending this audio to WaveSpeed and ElevenLabs for vocal separation and transcription.</span>
+                        </label>
+                        @error('provider_consent')
+                            <p class="text-sm text-red-700 dark:text-red-300">{{ $message }}</p>
+                        @enderror
+                        <button type="submit" class="inline-flex items-center justify-center px-4 py-2 text-sm font-medium text-white rounded-lg bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white">
+                            Start processing
+                        </button>
+                    </form>
+                </template>
+
+                <template x-if="canProcess && (!status.requires_provider_consent || status.provider_consent_confirmed)">
                     <form method="POST" :action="status.routes.process">
                         @csrf
                         <button type="submit" class="inline-flex items-center justify-center px-4 py-2 text-sm font-medium text-white rounded-lg bg-zinc-900 hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white">

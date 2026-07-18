@@ -5,6 +5,7 @@ namespace App\Support;
 use App\Contracts\KaraokeProcessor;
 use App\Exceptions\UnsupportedKaroksProcessingDriverException;
 use App\Support\Karaoke\Processors\MockKaraokeProcessor;
+use App\Support\Karaoke\Processors\RealKaraokeProcessor;
 
 class KaraokeProcessorManager
 {
@@ -14,6 +15,7 @@ class KaraokeProcessorManager
 
         return match ($driver) {
             'mock' => app(MockKaraokeProcessor::class),
+            'real' => app(RealKaraokeProcessor::class),
             default => throw UnsupportedKaroksProcessingDriverException::forDriver($driver),
         };
     }

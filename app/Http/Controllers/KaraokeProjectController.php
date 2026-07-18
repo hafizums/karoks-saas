@@ -6,6 +6,7 @@ use App\Enums\KaraokeProjectStatus;
 use App\Http\Requests\StoreKaraokeProjectRequest;
 use App\Models\KaraokeProject;
 use App\Rules\ValidKaraokeAudio;
+use App\Support\Karaoke\Processing\KaraokeAudioDurationInspector;
 use App\Support\KaraokeAudioStreamService;
 use App\Support\KaraokeProcessingStateService;
 use App\Support\KaraokeThemeParser;
@@ -80,6 +81,15 @@ class KaraokeProjectController extends Controller
                     throw new \RuntimeException('Unable to store uploaded audio.');
                 }
 
+                $durationInspection = app(KaraokeAudioDurationInspector::class)->inspectFile(
+                    Storage::disk('local')->path($storedPath),
+                    $detectedMime,
+                );
+
+                $durationSeconds = $durationInspection['readable'] === true
+                    ? (int) $durationInspection['duration_seconds']
+                    : null;
+
                 return KaraokeProject::create([
                     'public_id' => $publicId,
                     'user_id' => $userId,
@@ -89,6 +99,7 @@ class KaraokeProjectController extends Controller
                     'source_path' => $storedPath,
                     'mime_type' => $detectedMime,
                     'size_bytes' => $audio->getSize(),
+                    'duration_seconds' => $durationSeconds,
                     'status' => KaraokeProjectStatus::Uploaded,
                     'progress' => 0,
                     'rights_confirmed_at' => now(),

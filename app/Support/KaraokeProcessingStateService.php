@@ -7,6 +7,9 @@ use App\Enums\KaraokeProjectStatus;
 use App\Jobs\ProcessKaraokeProject;
 use App\Models\KaraokeProject;
 use App\Models\User;
+use App\Support\Karaoke\Processing\KaraokeProcessingCheckpointService;
+use App\Support\Karaoke\Processing\KaraokeProcessingDriverResolver;
+use App\Support\Karaoke\Processing\KaraokeProcessingGateService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -20,20 +23,33 @@ class KaraokeProcessingStateService
         'unsupported_audio',
         'cancelled',
         'usage_unavailable',
+        'provider_not_configured',
+        'provider_auth_failed',
+        'provider_insufficient_credit',
+        'provider_rate_limited',
+        'provider_timeout',
+        'provider_failed',
+        'invalid_provider_output',
+        'no_lyrics_found',
+        'invalid_audio',
     ];
 
     public function __construct(
         private readonly KaraokeUsageService $usageService,
+        private readonly KaraokeProcessingGateService $gateService,
+        private readonly KaraokeProcessingCheckpointService $checkpointService,
+        private readonly KaraokeProcessingDriverResolver $driverResolver,
     ) {}
 
     /**
      * @return array{dispatched: bool, run_id: string|null}
      */
-    public function queueForProcessing(KaraokeProject $project): array
+    public function queueForProcessing(KaraokeProject $project, bool $providerConsentAccepted = false): array
     {
         $this->usageService->assertProcessingEnabled();
+        $this->gateService->assertCanQueue($project, $providerConsentAccepted);
 
-        return DB::transaction(function () use ($project) {
+        return DB::transaction(function () use ($project, $providerConsentAccepted) {
             $locked = KaraokeProject::query()->whereKey($project->id)->lockForUpdate()->first();
 
             if ($locked === null) {
@@ -47,6 +63,13 @@ class KaraokeProcessingStateService
             if (! in_array($locked->status, [KaraokeProjectStatus::Uploaded, KaraokeProjectStatus::Cancelled], true)) {
                 throw new RuntimeException('Project cannot be queued for processing from its current state.');
             }
+
+            if ($providerConsentAccepted && $this->driverResolver->requiresProviderConsent()) {
+                $locked->forceFill(['provider_consent_confirmed_at' => now()])->save();
+            }
+
+            $this->checkpointService->clearForFreshAttempt($locked);
+            $locked->refresh();
 
             $attemptNumber = (int) $locked->processing_attempts + 1;
             $this->usageService->reserveForProject($locked->user, $locked, $attemptNumber);
@@ -64,6 +87,7 @@ class KaraokeProcessingStateService
                 'processing_failed_at' => null,
                 'error_code' => null,
                 'error_message' => null,
+                'processing_retryable' => null,
                 'instrumental_path' => null,
                 'instrumental_mime_type' => null,
                 'transcript' => null,
@@ -85,6 +109,7 @@ class KaraokeProcessingStateService
     public function retryProcessing(KaraokeProject $project): array
     {
         $this->usageService->assertProcessingEnabled();
+        $this->gateService->assertValidDuration($project);
 
         return DB::transaction(function () use ($project) {
             $locked = KaraokeProject::query()->whereKey($project->id)->lockForUpdate()->first();
@@ -102,10 +127,13 @@ class KaraokeProcessingStateService
             }
 
             $runId = (string) Str::uuid();
+            $nextAttempt = (int) $locked->processing_attempts + 1;
 
             $locked->forceFill([
                 'status' => KaraokeProjectStatus::Queued,
                 'processing_run_id' => $runId,
+                'provider_checkpoint_run_id' => $runId,
+                'provider_checkpoint_attempt' => $nextAttempt,
                 'processing_stage' => null,
                 'progress' => 0,
                 'queued_at' => now(),
@@ -114,11 +142,12 @@ class KaraokeProcessingStateService
                 'processing_failed_at' => null,
                 'error_code' => null,
                 'error_message' => null,
+                'processing_retryable' => null,
                 'instrumental_path' => null,
                 'instrumental_mime_type' => null,
                 'transcript' => null,
                 'theme' => null,
-                'processing_attempts' => (int) $locked->processing_attempts + 1,
+                'processing_attempts' => $nextAttempt,
             ])->save();
 
             $this->removePartialInstrumental($locked);
@@ -272,7 +301,7 @@ class KaraokeProcessingStateService
 
     public function markFailed(KaraokeProject $project, string $runId, string $errorCode, string $errorMessage, bool $retryable = true): bool
     {
-        return DB::transaction(function () use ($project, $runId, $errorCode, $errorMessage) {
+        return DB::transaction(function () use ($project, $runId, $errorCode, $errorMessage, $retryable) {
             $locked = KaraokeProject::query()->whereKey($project->id)->lockForUpdate()->first();
 
             if ($locked === null || ! $this->runIsActive($locked, $runId)) {
@@ -297,6 +326,7 @@ class KaraokeProcessingStateService
                 'processing_failed_at' => now(),
                 'error_code' => $safeCode,
                 'error_message' => $safeMessage,
+                'processing_retryable' => $retryable,
             ])->save();
 
             $this->removePartialInstrumental($locked);
@@ -322,7 +352,22 @@ class KaraokeProcessingStateService
             return false;
         }
 
-        return ! in_array($project->error_code, ['unsupported_audio', 'source_missing', 'cancelled', 'usage_unavailable'], true);
+        if ($project->processing_retryable !== null) {
+            return (bool) $project->processing_retryable;
+        }
+
+        return ! in_array($project->error_code, [
+            'unsupported_audio',
+            'source_missing',
+            'cancelled',
+            'usage_unavailable',
+            'provider_not_configured',
+            'provider_auth_failed',
+            'provider_insufficient_credit',
+            'invalid_provider_output',
+            'no_lyrics_found',
+            'invalid_audio',
+        ], true);
     }
 
     public function runIsActive(KaraokeProject $project, string $runId): bool
@@ -348,8 +393,10 @@ class KaraokeProcessingStateService
         $canProcessBase = $project->status === KaraokeProjectStatus::Uploaded || $project->status === KaraokeProjectStatus::Cancelled;
         $canRetryBase = $project->status === KaraokeProjectStatus::Failed && $this->isRetryable($project);
 
+        $realAvailable = ! $this->driverResolver->isReal() || $this->driverResolver->realConfigured();
+
         $capabilities = [
-            'can_process' => $canProcessBase && $usage['enabled'] && ($usage['unlimited'] || ($usage['remaining'] ?? 0) > 0),
+            'can_process' => $canProcessBase && $realAvailable && $usage['enabled'] && ($usage['unlimited'] || ($usage['remaining'] ?? 0) > 0),
             'can_cancel' => in_array($project->status, [KaraokeProjectStatus::Queued, KaraokeProjectStatus::Processing], true),
             'can_retry' => $canRetryBase && $usage['enabled'],
             'can_play' => $project->isReadyForPlayback(),
@@ -367,6 +414,11 @@ class KaraokeProcessingStateService
             'error_code' => $project->error_code,
             'error_message' => $project->error_message,
             'updated_at' => $project->updated_at?->toIso8601String(),
+            'processing_mode' => $this->driverResolver->userFacingModeLabel(),
+            'simulated_processing' => $this->driverResolver->isMock(),
+            'real_processing_available' => $realAvailable,
+            'requires_provider_consent' => $this->driverResolver->requiresProviderConsent(),
+            'provider_consent_confirmed' => $project->provider_consent_confirmed_at !== null,
             'capabilities' => $capabilities,
             'usage' => $usage,
             'processing_enabled' => $this->usageService->processingEnabled(),
