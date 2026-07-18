@@ -2,8 +2,10 @@
 
 namespace App\Console\Commands;
 
+use App\Enums\KaraokeProjectStatus;
 use App\Models\KaraokeProject;
 use App\Models\User;
+use App\Support\Karaoke\Processors\MockKaraokeSyntheticTranscript;
 use App\Support\KaroksDemoAudio;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\App;
@@ -58,8 +60,11 @@ class SeedKaroksDemoCommand extends Command
 
         $publicId = (string) Str::uuid();
         $storagePath = 'karaoke/'.$user->id.'/'.$publicId.'/source.wav';
+        $instrumentalPath = 'karaoke/'.$user->id.'/'.$publicId.'/instrumental.wav';
+        $audioBytes = file_get_contents($audioFixturePath);
 
-        Storage::disk('local')->put($storagePath, file_get_contents($audioFixturePath));
+        Storage::disk('local')->put($storagePath, $audioBytes);
+        Storage::disk('local')->put($instrumentalPath, $audioBytes);
 
         $project = KaraokeProject::query()->create([
             'public_id' => $publicId,
@@ -68,8 +73,14 @@ class SeedKaroksDemoCommand extends Command
             'artist' => 'Demo Artist',
             'original_filename' => 'demo.wav',
             'source_path' => $storagePath,
+            'instrumental_path' => $instrumentalPath,
+            'instrumental_mime_type' => 'audio/wav',
             'mime_type' => 'audio/wav',
             'size_bytes' => Storage::disk('local')->size($storagePath),
+            'status' => KaraokeProjectStatus::Completed,
+            'processing_stage' => 'completed',
+            'progress' => 100,
+            'processing_completed_at' => now(),
             'rights_confirmed_at' => now(),
             'transcript' => $transcript,
             'theme' => [
@@ -78,6 +89,7 @@ class SeedKaroksDemoCommand extends Command
                 'baseColor' => '#f4f0e6',
                 'highlightColor' => '#f0c14b',
             ],
+            'error_message' => MockKaraokeSyntheticTranscript::DISCLOSURE,
         ]);
 
         $this->info('Demo karaoke project created.');

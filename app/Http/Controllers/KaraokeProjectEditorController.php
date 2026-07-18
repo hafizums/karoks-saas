@@ -44,7 +44,7 @@ class KaraokeProjectEditorController extends Controller
     ): JsonResponse {
         $this->authorize('update', $karaokeProject);
 
-        if (! $karaokeProject->hasPlayableTranscript()) {
+        if (! $karaokeProject->isReadyForEditing()) {
             return response()->json([
                 'message' => 'Lyrics are not ready for editing.',
             ], 422);
@@ -71,7 +71,7 @@ class KaraokeProjectEditorController extends Controller
     {
         $this->authorize('export', $karaokeProject);
 
-        if (! $karaokeProject->hasPlayableTranscript()) {
+        if (! $karaokeProject->isReadyForEditing()) {
             return response()->json([
                 'message' => 'Lyrics are not ready for export.',
             ], 422);
@@ -105,7 +105,7 @@ class KaraokeProjectEditorController extends Controller
     ): JsonResponse {
         $this->authorize('import', $karaokeProject);
 
-        if (! $karaokeProject->hasPlayableTranscript()) {
+        if (! $karaokeProject->isReadyForEditing()) {
             return response()->json([
                 'message' => 'Lyrics are not ready for import.',
             ], 422);

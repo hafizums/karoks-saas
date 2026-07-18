@@ -2,8 +2,10 @@
 
 namespace App\Policies;
 
+use App\Enums\KaraokeProjectStatus;
 use App\Models\KaraokeProject;
 use App\Models\User;
+use App\Support\KaraokeProcessingStateService;
 
 class KaraokeProjectPolicy
 {
@@ -49,10 +51,48 @@ class KaraokeProjectPolicy
 
     public function export(User $user, KaraokeProject $karaokeProject): bool
     {
-        return $this->owns($user, $karaokeProject);
+        return $this->owns($user, $karaokeProject) && $karaokeProject->isReadyForEditing();
     }
 
     public function import(User $user, KaraokeProject $karaokeProject): bool
+    {
+        return $this->owns($user, $karaokeProject) && $karaokeProject->isReadyForEditing();
+    }
+
+    public function process(User $user, KaraokeProject $karaokeProject): bool
+    {
+        if (! $this->owns($user, $karaokeProject)) {
+            return false;
+        }
+
+        if (in_array($karaokeProject->status, [KaraokeProjectStatus::Queued, KaraokeProjectStatus::Processing], true)) {
+            return true;
+        }
+
+        return in_array($karaokeProject->status, [KaraokeProjectStatus::Uploaded, KaraokeProjectStatus::Cancelled], true);
+    }
+
+    public function cancel(User $user, KaraokeProject $karaokeProject): bool
+    {
+        return $this->owns($user, $karaokeProject)
+            && in_array($karaokeProject->status, [KaraokeProjectStatus::Queued, KaraokeProjectStatus::Processing], true);
+    }
+
+    public function retry(User $user, KaraokeProject $karaokeProject): bool
+    {
+        if (! $this->owns($user, $karaokeProject)) {
+            return false;
+        }
+
+        if (in_array($karaokeProject->status, [KaraokeProjectStatus::Queued, KaraokeProjectStatus::Processing], true)) {
+            return true;
+        }
+
+        return $karaokeProject->status === KaraokeProjectStatus::Failed
+            && app(KaraokeProcessingStateService::class)->isRetryable($karaokeProject);
+    }
+
+    public function viewStatus(User $user, KaraokeProject $karaokeProject): bool
     {
         return $this->owns($user, $karaokeProject);
     }

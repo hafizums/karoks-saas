@@ -53,11 +53,13 @@ class KaraokeAudioStreamService
     public function respond(KaraokeProject $project, ?string $rangeHeader, bool $head = false): Response
     {
         $disk = Storage::disk('local');
-        $path = $project->source_path;
+        $path = $project->playbackAudioPath();
 
-        if (! $disk->exists($path)) {
+        if ($path === null || ! $disk->exists($path)) {
             abort(404);
         }
+
+        $mimeType = $project->playbackMimeType() ?? $project->mime_type;
 
         $absolutePath = $disk->path($path);
         $fileSize = filesize($absolutePath);
@@ -67,7 +69,7 @@ class KaraokeAudioStreamService
         }
 
         $baseHeaders = [
-            'Content-Type' => $project->mime_type,
+            'Content-Type' => $mimeType,
             'Content-Disposition' => 'inline',
             'Accept-Ranges' => 'bytes',
             'Cache-Control' => 'private, no-store, no-cache, must-revalidate',
