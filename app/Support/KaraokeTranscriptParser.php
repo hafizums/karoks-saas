@@ -56,6 +56,7 @@ class KaraokeTranscriptParser
 
         $lines = [];
         $lineIds = [];
+        $wordIds = [];
 
         foreach ($rawLines as $rawLine) {
             if (! is_array($rawLine)) {
@@ -74,7 +75,7 @@ class KaraokeTranscriptParser
                 return null;
             }
 
-            $words = self::parseWords($rawLine['words'] ?? null, $lineStart, $lineEnd);
+            $words = self::parseWords($rawLine['words'] ?? null, $lineStart, $lineEnd, $wordIds);
             if ($words === null) {
                 return null;
             }
@@ -91,16 +92,16 @@ class KaraokeTranscriptParser
     }
 
     /**
+     * @param  array<string, true>  $wordIds
      * @return list<array{id: string, text: string, start: float, end: float}>|null
      */
-    private static function parseWords(mixed $rawWords, float $lineStart, float $lineEnd): ?array
+    private static function parseWords(mixed $rawWords, float $lineStart, float $lineEnd, array &$wordIds): ?array
     {
         if (! is_array($rawWords) || $rawWords === []) {
             return null;
         }
 
         $words = [];
-        $wordIds = [];
 
         foreach ($rawWords as $rawWord) {
             if (! is_array($rawWord)) {

@@ -1,6 +1,11 @@
 /* Karoks native player — adapted from KarokJS stage styling for Wave Anchor */
 
 .karoks-page {
+  overflow: hidden;
+  border-radius: 0.75rem;
+}
+
+.karaoke-stage {
   --stage-glow: #221c10;
   --stage-top: #0e0e12;
   --bg-deep: #0a0a0c;
@@ -11,36 +16,6 @@
   --control: rgba(244, 240, 230, 0.08);
   --control-hover: rgba(244, 240, 230, 0.14);
   --danger-soft: rgba(120, 32, 32, 0.35);
-  background:
-    radial-gradient(ellipse 90% 60% at 50% 18%, var(--stage-glow) 0%, transparent 55%),
-    linear-gradient(180deg, var(--stage-top) 0%, var(--bg-deep) 100%);
-}
-
-.karoks-page[data-bg="noir-gold"],
-.karaoke-stage[data-bg="noir-gold"]:fullscreen,
-.karaoke-stage[data-bg="noir-gold"]:-webkit-full-screen {
-  --stage-glow: #221c10;
-  --stage-top: #0e0e12;
-  --bg-deep: #0a0a0c;
-}
-
-.karoks-page[data-bg="midnight-blue"],
-.karaoke-stage[data-bg="midnight-blue"]:fullscreen,
-.karaoke-stage[data-bg="midnight-blue"]:-webkit-full-screen {
-  --stage-glow: #13243a;
-  --stage-top: #0a1220;
-  --bg-deep: #070b14;
-}
-
-.karoks-page[data-bg="neon-berry"],
-.karaoke-stage[data-bg="neon-berry"]:fullscreen,
-.karaoke-stage[data-bg="neon-berry"]:-webkit-full-screen {
-  --stage-glow: #2a1230;
-  --stage-top: #140a18;
-  --bg-deep: #0c070f;
-}
-
-.karaoke-stage {
   --lyric-base: #f4f0e6;
   --lyric-highlight: #f0c14b;
   --lyric-highlight-glow: rgba(240, 193, 75, 0.28);
@@ -53,6 +28,27 @@
   border-radius: 0.75rem;
   overflow: hidden;
   color: var(--text-primary);
+  background:
+    radial-gradient(ellipse 90% 60% at 50% 18%, var(--stage-glow) 0%, transparent 55%),
+    linear-gradient(180deg, var(--stage-top) 0%, var(--bg-deep) 100%);
+}
+
+.karaoke-stage[data-bg="noir-gold"] {
+  --stage-glow: #221c10;
+  --stage-top: #0e0e12;
+  --bg-deep: #0a0a0c;
+}
+
+.karaoke-stage[data-bg="midnight-blue"] {
+  --stage-glow: #13243a;
+  --stage-top: #0a1220;
+  --bg-deep: #070b14;
+}
+
+.karaoke-stage[data-bg="neon-berry"] {
+  --stage-glow: #2a1230;
+  --stage-top: #140a18;
+  --bg-deep: #0c070f;
 }
 
 .karaoke-stage.is-compact {
@@ -68,6 +64,9 @@
   height: 100%;
   min-height: 100dvh;
   border-radius: 0;
+  background:
+    radial-gradient(ellipse 90% 60% at 50% 18%, var(--stage-glow) 0%, transparent 55%),
+    linear-gradient(180deg, var(--stage-top) 0%, var(--bg-deep) 100%);
 }
 
 .stage-header {

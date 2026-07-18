@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\KaraokeProject;
 use App\Models\User;
+use App\Support\KaroksDemoAudio;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\App;
 use Illuminate\Support\Facades\Storage;
@@ -33,10 +34,16 @@ class SeedKaroksDemoCommand extends Command
         }
 
         $transcriptPath = database_path('fixtures/karoks-demo-transcript.json');
-        $audioFixturePath = base_path('tests/fixtures/sample.wav');
+        $audioFixturePath = KaroksDemoAudio::fixturePath();
 
-        if (! is_file($transcriptPath) || ! is_file($audioFixturePath)) {
-            $this->error('Demo fixtures are missing from the repository.');
+        if (! is_file($transcriptPath)) {
+            $this->error('Demo transcript fixture is missing from the repository.');
+
+            return self::FAILURE;
+        }
+
+        if (! KaroksDemoAudio::ensureFixtureExists()) {
+            $this->error('Unable to create the demo audio fixture.');
 
             return self::FAILURE;
         }

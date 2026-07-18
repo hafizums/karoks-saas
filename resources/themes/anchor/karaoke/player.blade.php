@@ -16,7 +16,7 @@
             </a>
         </div>
 
-        <div class="mt-6 overflow-hidden rounded-xl karoks-page" data-bg="{{ $theme['backgroundPreset'] }}">
+        <div class="mt-6 overflow-hidden rounded-xl karoks-page">
             @if ($transcript === null)
                 <div class="karoks-unavailable" role="status">
                     <h2 class="text-lg font-semibold">Lyrics are not ready</h2>
@@ -35,7 +35,6 @@
                         'audioUrl' => $audioUrl,
                         'compact' => true,
                     ]))"
-                    x-init="init()"
                     x-ref="stage"
                 >
                     <header class="stage-header">
@@ -74,6 +73,7 @@
                                                     <span>
                                                         <span class="karaoke-word-base" x-text="word.text" aria-hidden="true"></span>
                                                         <span class="karaoke-word-fill" x-text="word.text" aria-hidden="true"></span>
+                                                        <span class="sr-only" x-text="word.text"></span>
                                                     </span>
                                                 </template>
                                                 <template x-if="! wordIsActive(word)">

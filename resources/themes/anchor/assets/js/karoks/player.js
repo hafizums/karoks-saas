@@ -36,6 +36,8 @@ export function registerKaroksPlayer(Alpine) {
     _listenersBound: false,
     _boundHandlers: null,
     _fullscreenHandler: null,
+    _initialized: false,
+    _destroyed: false,
 
     get formattedCurrentTime() {
       return formatTime(this.currentTime);
@@ -50,6 +52,11 @@ export function registerKaroksPlayer(Alpine) {
     },
 
     init() {
+      if (this._initialized) {
+        return;
+      }
+
+      this._initialized = true;
       this._audio = this.$refs.audio;
       this._applyView(0, this.duration);
       this._bindAudioEvents();
@@ -225,6 +232,10 @@ export function registerKaroksPlayer(Alpine) {
     },
 
     _bindFullscreenEvents() {
+      if (this._fullscreenHandler) {
+        return;
+      }
+
       this._fullscreenHandler = () => {
         const stage = this.$refs.stage;
         this.isFullscreen = Boolean(stage && document.fullscreenElement === stage);

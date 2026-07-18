@@ -3,6 +3,7 @@
 use App\Models\KaraokeProject;
 use App\Models\User;
 use App\Support\KaraokeTranscriptParser;
+use App\Support\KaroksDemoAudio;
 use DevDojo\Themes\Models\Theme;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Support\Facades\Storage;
@@ -73,7 +74,8 @@ it('allows owners to access their player', function () {
         ->assertOk()
         ->assertSee('Karoks')
         ->assertSee($project->title)
-        ->assertSee('x-data="karoksPlayer', false);
+        ->assertSee('x-data="karoksPlayer', false)
+        ->assertDontSee('x-init="init()"', false);
 });
 
 it('blocks other users from the player', function () {
@@ -142,6 +144,32 @@ it('escapes html in lyric strings for safe text rendering', function () {
     $response->assertOk();
     $response->assertDontSee('<img src=x onerror=alert(1)>', false);
     $response->assertSee('x-text="word.text"', false);
+    $response->assertSee('class="sr-only"', false);
+});
+
+it('rejects duplicate word ids across lines', function () {
+    $transcript = demoKaraokeTranscript();
+    $transcript['lines'][1]['words'][0]['id'] = $transcript['lines'][0]['words'][0]['id'];
+
+    expect(KaraokeTranscriptParser::parse($transcript))->toBeNull();
+});
+
+it('provides a playable demo audio fixture for local testing', function () {
+    expect(KaroksDemoAudio::ensureFixtureExists())->toBeTrue();
+
+    $path = KaroksDemoAudio::fixturePath();
+    $bytes = file_get_contents($path);
+
+    expect(strlen($bytes))->toBeGreaterThan(1000);
+    expect(substr($bytes, 0, 4))->toBe('RIFF');
+    expect(substr($bytes, 8, 4))->toBe('WAVE');
+
+    $sampleRate = unpack('V', substr($bytes, 24, 4))[1];
+    $dataSize = unpack('V', substr($bytes, 40, 4))[1];
+    $duration = $dataSize / ($sampleRate * 2);
+
+    expect($duration)->toBeGreaterThan(26.0);
+    expect($duration)->toBeLessThan(28.0);
 });
 
 it('returns full audio with correct headers and content length', function () {
