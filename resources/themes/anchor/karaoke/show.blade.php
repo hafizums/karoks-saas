@@ -25,6 +25,14 @@
                 </div>
             @endif
 
+            @error('processing')
+                <div class="p-4 text-sm text-red-800 bg-red-50 border border-red-200 rounded-lg dark:bg-red-950/30 dark:text-red-100 dark:border-red-900/60" role="alert">
+                    {{ $message }}
+                </div>
+            @enderror
+
+            @include('theme::karaoke.partials.usage-summary')
+
             <div class="p-6 space-y-4 border rounded-xl border-zinc-200 dark:border-zinc-700">
                 <h4 class="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Upload information</h4>
                 <dl class="grid gap-4 text-sm sm:grid-cols-2">
@@ -134,6 +142,21 @@
                             Retry processing
                         </button>
                     </form>
+                </template>
+
+                <template x-if="isFailed && canRetry">
+                    <p class="w-full text-xs text-zinc-500 dark:text-zinc-400">
+                        Retrying a processing failure does not consume another monthly allowance.
+                    </p>
+                </template>
+
+                <template x-if="(isUploaded || isCancelled) && !canProcess && processingEnabled">
+                    <p class="w-full text-sm text-red-700 dark:text-red-300">
+                        Processing cannot be started because your monthly allowance is exhausted or unavailable.
+                        @if (\Illuminate\Support\Facades\Route::has('pricing'))
+                            <a href="{{ route('pricing') }}" wire:navigate class="font-medium underline underline-offset-2">View plans</a>
+                        @endif
+                    </p>
                 </template>
 
                 @if ($isReadyForPlayback)

@@ -78,6 +78,8 @@ beforeEach(function () {
     Queue::fake();
     Config::set('karoks.processing.driver', 'mock');
     Config::set('karoks.processing.mock_stage_delay_ms', 0);
+    Config::set('karoks.processing.enabled', true);
+    Config::set('karoks.usage.default_monthly_limit', 100);
 });
 
 it('redirects guests from processing routes', function () {

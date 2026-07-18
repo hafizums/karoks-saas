@@ -38,6 +38,10 @@ export function mergeProcessingStatus(current, incoming) {
       ...(current?.capabilities ?? {}),
       ...(incoming?.capabilities ?? {}),
     },
+    usage: {
+      ...(current?.usage ?? {}),
+      ...(incoming?.usage ?? {}),
+    },
     routes: {
       ...(current?.routes ?? {}),
       ...(incoming?.routes ?? {}),
@@ -233,6 +237,14 @@ export function registerKaroksProcessing(Alpine) {
 
     get canPlay() {
       return Boolean(this.status.capabilities?.can_play);
+    },
+
+    get usage() {
+      return this.status.usage ?? {};
+    },
+
+    get processingEnabled() {
+      return Boolean(this.status.processing_enabled ?? true);
     },
   }));
 }

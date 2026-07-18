@@ -3,6 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Enums\KaraokeProjectStatus;
+use App\Exceptions\KaraokeProcessingDisabledException;
+use App\Exceptions\KaraokeUsageLimitExceededException;
 use App\Models\KaraokeProject;
 use App\Support\KaraokeProcessingStateService;
 use Illuminate\Http\JsonResponse;
@@ -27,6 +29,14 @@ class KaraokeProjectProcessingController extends Controller
 
         try {
             $stateService->queueForProcessing($karaokeProject);
+        } catch (KaraokeProcessingDisabledException) {
+            return redirect()
+                ->route('karaoke.projects.show', $karaokeProject)
+                ->withErrors(['processing' => 'Processing is temporarily unavailable. Please try again later.']);
+        } catch (KaraokeUsageLimitExceededException) {
+            return redirect()
+                ->route('karaoke.projects.show', $karaokeProject)
+                ->withErrors(['processing' => 'Your monthly processing allowance has been reached. Upgrade your plan or wait until your allowance resets.']);
         } catch (RuntimeException $exception) {
             abort(422, $exception->getMessage());
         }
@@ -65,6 +75,10 @@ class KaraokeProjectProcessingController extends Controller
 
         try {
             $stateService->retryProcessing($karaokeProject);
+        } catch (KaraokeProcessingDisabledException) {
+            return redirect()
+                ->route('karaoke.projects.show', $karaokeProject)
+                ->withErrors(['processing' => 'Processing is temporarily unavailable. Please try again later.']);
         } catch (RuntimeException $exception) {
             abort(422, $exception->getMessage());
         }
@@ -80,6 +94,6 @@ class KaraokeProjectProcessingController extends Controller
 
         $karaokeProject->refresh();
 
-        return response()->json($stateService->statusPayload($karaokeProject));
+        return response()->json($stateService->statusPayload($karaokeProject, auth()->user()));
     }
 }

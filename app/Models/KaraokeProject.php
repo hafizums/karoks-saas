@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\KaraokeProjectStatus;
+use App\Support\KaraokeProcessingStateService;
 use App\Support\KaraokeStorage;
 use App\Support\KaraokeTranscriptParser;
 use Database\Factories\KaraokeProjectFactory;
@@ -164,6 +165,7 @@ class KaraokeProject extends Model
         });
 
         static::deleting(function (KaraokeProject $project): void {
+            app(KaraokeProcessingStateService::class)->releaseUsageForDeletedProject($project);
             KaraokeStorage::deleteProjectFiles($project);
         });
     }

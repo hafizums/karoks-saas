@@ -6,6 +6,8 @@
             :border="false"
         />
 
+        @include('theme::karaoke.partials.usage-summary')
+
         <form method="POST" action="{{ route('karaoke.projects.store') }}" enctype="multipart/form-data" class="mt-8 space-y-6 max-w-2xl">
             @csrf
 

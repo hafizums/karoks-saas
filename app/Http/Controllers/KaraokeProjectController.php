@@ -10,6 +10,7 @@ use App\Support\KaraokeAudioStreamService;
 use App\Support\KaraokeProcessingStateService;
 use App\Support\KaraokeThemeParser;
 use App\Support\KaraokeTranscriptParser;
+use App\Support\KaraokeUsageService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
@@ -40,7 +41,10 @@ class KaraokeProjectController extends Controller
     {
         $this->authorize('create', KaraokeProject::class);
 
-        return view('theme::karaoke.create');
+        return view('theme::karaoke.create', [
+            'usageSummary' => app(KaraokeUsageService::class)->summary(auth()->user()),
+            'processingEnabled' => app(KaraokeUsageService::class)->processingEnabled(),
+        ]);
     }
 
     public function store(StoreKaraokeProjectRequest $request): RedirectResponse
@@ -111,7 +115,9 @@ class KaraokeProjectController extends Controller
         return view('theme::karaoke.show', [
             'project' => $karaokeProject,
             'isReadyForPlayback' => $karaokeProject->isReadyForPlayback(),
-            'processingStatus' => app(KaraokeProcessingStateService::class)->statusPayload($karaokeProject),
+            'processingStatus' => app(KaraokeProcessingStateService::class)->statusPayload($karaokeProject, auth()->user()),
+            'usageSummary' => app(KaraokeUsageService::class)->summary(auth()->user()),
+            'processingEnabled' => app(KaraokeUsageService::class)->processingEnabled(),
         ]);
     }
 

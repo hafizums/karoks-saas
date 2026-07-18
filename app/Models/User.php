@@ -44,6 +44,11 @@ class User extends WaveUser
         return $this->hasMany(KaraokeProject::class);
     }
 
+    public function karaokeUsageRecords(): HasMany
+    {
+        return $this->hasMany(KaraokeUsageRecord::class);
+    }
+
     protected static function boot()
     {
         parent::boot();

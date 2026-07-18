@@ -6,6 +6,7 @@ use App\Enums\KaraokeProcessingStage;
 use App\Enums\KaraokeProjectStatus;
 use App\Jobs\ProcessKaraokeProject;
 use App\Models\KaraokeProject;
+use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -20,11 +21,17 @@ class KaraokeProcessingStateService
         'cancelled',
     ];
 
+    public function __construct(
+        private readonly KaraokeUsageService $usageService,
+    ) {}
+
     /**
      * @return array{dispatched: bool, run_id: string|null}
      */
     public function queueForProcessing(KaraokeProject $project): array
     {
+        $this->usageService->assertProcessingEnabled();
+
         return DB::transaction(function () use ($project) {
             $locked = KaraokeProject::query()->whereKey($project->id)->lockForUpdate()->first();
 
@@ -39,6 +46,9 @@ class KaraokeProcessingStateService
             if (! in_array($locked->status, [KaraokeProjectStatus::Uploaded, KaraokeProjectStatus::Cancelled], true)) {
                 throw new RuntimeException('Project cannot be queued for processing from its current state.');
             }
+
+            $attemptNumber = (int) $locked->processing_attempts + 1;
+            $this->usageService->reserveForProject($locked->user, $locked, $attemptNumber);
 
             $runId = (string) Str::uuid();
 
@@ -73,6 +83,8 @@ class KaraokeProcessingStateService
      */
     public function retryProcessing(KaraokeProject $project): array
     {
+        $this->usageService->assertProcessingEnabled();
+
         return DB::transaction(function () use ($project) {
             $locked = KaraokeProject::query()->whereKey($project->id)->lockForUpdate()->first();
 
@@ -129,6 +141,8 @@ class KaraokeProcessingStateService
                 return false;
             }
 
+            $wasQueued = $locked->status === KaraokeProjectStatus::Queued;
+
             $locked->forceFill([
                 'status' => KaraokeProjectStatus::Cancelled,
                 'processing_stage' => null,
@@ -137,6 +151,10 @@ class KaraokeProcessingStateService
                 'error_code' => 'cancelled',
                 'error_message' => 'Processing was cancelled.',
             ])->save();
+
+            if ($wasQueued) {
+                $this->usageService->releaseQueuedForProject($locked, 'cancelled');
+            }
 
             $this->removePartialInstrumental($locked);
 
@@ -160,6 +178,8 @@ class KaraokeProcessingStateService
             if ($locked->status !== KaraokeProjectStatus::Queued) {
                 return false;
             }
+
+            $this->usageService->consumeForRun($locked, $runId);
 
             $locked->forceFill([
                 'status' => KaraokeProjectStatus::Processing,
@@ -309,12 +329,17 @@ class KaraokeProcessingStateService
     /**
      * @return array<string, mixed>
      */
-    public function statusPayload(KaraokeProject $project): array
+    public function statusPayload(KaraokeProject $project, ?User $viewer = null): array
     {
+        $viewer ??= $project->user;
+        $usage = $this->usageService->summary($viewer);
+        $canProcessBase = $project->status === KaraokeProjectStatus::Uploaded || $project->status === KaraokeProjectStatus::Cancelled;
+        $canRetryBase = $project->status === KaraokeProjectStatus::Failed && $this->isRetryable($project);
+
         $capabilities = [
-            'can_process' => $project->status === KaraokeProjectStatus::Uploaded || $project->status === KaraokeProjectStatus::Cancelled,
+            'can_process' => $canProcessBase && $usage['enabled'] && ($usage['unlimited'] || ($usage['remaining'] ?? 0) > 0),
             'can_cancel' => in_array($project->status, [KaraokeProjectStatus::Queued, KaraokeProjectStatus::Processing], true),
-            'can_retry' => $project->status === KaraokeProjectStatus::Failed && $this->isRetryable($project),
+            'can_retry' => $canRetryBase && $usage['enabled'],
             'can_play' => $project->isReadyForPlayback(),
             'can_edit' => $project->isReadyForEditing(),
         ];
@@ -331,6 +356,8 @@ class KaraokeProcessingStateService
             'error_message' => $project->error_message,
             'updated_at' => $project->updated_at?->toIso8601String(),
             'capabilities' => $capabilities,
+            'usage' => $usage,
+            'processing_enabled' => $this->usageService->processingEnabled(),
             'routes' => [
                 'process' => route('karaoke.projects.process', $project),
                 'cancel' => route('karaoke.projects.cancel', $project),
@@ -338,6 +365,11 @@ class KaraokeProcessingStateService
                 'status' => route('karaoke.projects.status', $project),
             ],
         ];
+    }
+
+    public function releaseUsageForDeletedProject(KaraokeProject $project): void
+    {
+        $this->usageService->detachProjectRecords($project);
     }
 
     public function removePartialInstrumental(KaraokeProject $project): void
