@@ -13,5 +13,7 @@
 
 use Wave\Facades\Wave;
 
+require __DIR__.'/karaoke.php';
+
 // Wave routes
 Wave::routes();
