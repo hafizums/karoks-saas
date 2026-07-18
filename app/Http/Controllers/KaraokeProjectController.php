@@ -7,6 +7,7 @@ use App\Http\Requests\StoreKaraokeProjectRequest;
 use App\Models\KaraokeProject;
 use App\Rules\ValidKaraokeAudio;
 use App\Support\KaraokeAudioStreamService;
+use App\Support\KaraokeProcessingStateService;
 use App\Support\KaraokeThemeParser;
 use App\Support\KaraokeTranscriptParser;
 use Illuminate\Http\RedirectResponse;
@@ -109,7 +110,8 @@ class KaraokeProjectController extends Controller
 
         return view('theme::karaoke.show', [
             'project' => $karaokeProject,
-            'hasPlayableTranscript' => $karaokeProject->hasPlayableTranscript(),
+            'isReadyForPlayback' => $karaokeProject->isReadyForPlayback(),
+            'processingStatus' => app(KaraokeProcessingStateService::class)->statusPayload($karaokeProject),
         ]);
     }
 

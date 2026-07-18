@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\KaraokeProjectController;
 use App\Http\Controllers\KaraokeProjectEditorController;
+use App\Http\Controllers\KaraokeProjectProcessingController;
 use Illuminate\Support\Facades\Route;
 
 Route::middleware('auth')
@@ -19,6 +20,18 @@ Route::middleware('auth')
         Route::post('/{karaokeProject}/import', [KaraokeProjectEditorController::class, 'import'])
             ->middleware('throttle:karoks-editor')
             ->name('import');
+        Route::post('/{karaokeProject}/process', [KaraokeProjectProcessingController::class, 'process'])
+            ->middleware('throttle:karoks-processing')
+            ->name('process');
+        Route::post('/{karaokeProject}/cancel', [KaraokeProjectProcessingController::class, 'cancel'])
+            ->middleware('throttle:karoks-processing')
+            ->name('cancel');
+        Route::post('/{karaokeProject}/retry', [KaraokeProjectProcessingController::class, 'retry'])
+            ->middleware('throttle:karoks-processing')
+            ->name('retry');
+        Route::get('/{karaokeProject}/status', [KaraokeProjectProcessingController::class, 'status'])
+            ->middleware('throttle:karoks-processing')
+            ->name('status');
         Route::get('/{karaokeProject}/player', [KaraokeProjectController::class, 'player'])->name('player');
         Route::match(['get', 'head'], '/{karaokeProject}/audio', [KaraokeProjectController::class, 'audio'])->name('audio');
         Route::get('/{karaokeProject}/source', [KaraokeProjectController::class, 'source'])->name('source');

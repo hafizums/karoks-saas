@@ -2,8 +2,10 @@
 
 namespace App\Providers;
 
+use App\Contracts\KaraokeProcessor;
 use App\Listeners\LogSuccessfulLogin;
 use App\Listeners\LogSuccessfulLogout;
+use App\Support\KaraokeProcessorManager;
 use Exception;
 use Illuminate\Auth\Events\Login;
 use Illuminate\Auth\Events\Logout;
@@ -32,7 +34,9 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->app->bind(KaraokeProcessor::class, function ($app) {
+            return $app->make(KaraokeProcessorManager::class)->driver();
+        });
     }
 
     /**
@@ -96,6 +100,10 @@ class AppServiceProvider extends ServiceProvider
         });
 
         RateLimiter::for('karoks-editor', function (Request $request) {
+            return Limit::perMinute(120)->by($request->user()?->id ?: $request->ip());
+        });
+
+        RateLimiter::for('karoks-processing', function (Request $request) {
             return Limit::perMinute(120)->by($request->user()?->id ?: $request->ip());
         });
     }

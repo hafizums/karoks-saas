@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\KaraokeProjectStatus;
 use App\Models\KaraokeProject;
 use App\Models\User;
 use App\Support\KaraokeTranscriptParser;
@@ -34,7 +35,7 @@ function createPlayerProject(User $user, array $attributes = []): KaraokeProject
 
     Storage::disk('local')->put($path, $audioBytes);
 
-    return KaraokeProject::factory()->create(array_merge([
+    $project = KaraokeProject::factory()->create(array_merge([
         'user_id' => $user->id,
         'public_id' => $publicId,
         'source_path' => $path,
@@ -42,6 +43,23 @@ function createPlayerProject(User $user, array $attributes = []): KaraokeProject
         'size_bytes' => strlen($audioBytes),
         'transcript' => demoKaraokeTranscript(),
     ], $attributes));
+
+    if (! array_key_exists('status', $attributes)) {
+        $instrumentalPath = $project->storageDirectory().'/instrumental.wav';
+        Storage::disk('local')->put($instrumentalPath, $audioBytes);
+
+        $project->forceFill([
+            'status' => KaraokeProjectStatus::Completed,
+            'instrumental_path' => $instrumentalPath,
+            'instrumental_mime_type' => 'audio/wav',
+            'processing_stage' => 'completed',
+            'progress' => 100,
+        ])->save();
+
+        $project->refresh();
+    }
+
+    return $project;
 }
 
 beforeEach(function () {
@@ -98,25 +116,47 @@ it('blocks other users from streaming audio', function () {
         ->assertForbidden();
 });
 
-it('shows a safe unavailable state when transcript is missing', function () {
+it('forbids player access when transcript is missing', function () {
     $user = createKaraokePlayerUser();
-    $project = createPlayerProject($user, ['transcript' => null]);
+    $project = createPlayerProject($user, [
+        'transcript' => null,
+        'status' => KaraokeProjectStatus::Uploaded,
+    ]);
 
     $this->actingAs($user)
         ->get(route('karaoke.projects.player', $project))
-        ->assertOk()
-        ->assertSee('Lyrics are not ready')
-        ->assertDontSee('InvalidArgumentException', false);
+        ->assertForbidden();
 });
 
-it('shows a safe unavailable state when transcript is malformed', function () {
+it('forbids player access when transcript is malformed', function () {
     $user = createKaraokePlayerUser();
-    $project = createPlayerProject($user, ['transcript' => ['version' => 99, 'lines' => []]]);
+    $project = createPlayerProject($user, [
+        'transcript' => ['version' => 99, 'lines' => []],
+        'status' => KaraokeProjectStatus::Uploaded,
+    ]);
 
     $this->actingAs($user)
         ->get(route('karaoke.projects.player', $project))
-        ->assertOk()
-        ->assertSee('Lyrics are not ready');
+        ->assertForbidden();
+});
+
+it('forbids player access for uploaded projects with injected transcripts', function () {
+    $user = createKaraokePlayerUser();
+    $project = createPlayerProject($user, ['status' => KaraokeProjectStatus::Uploaded]);
+
+    $this->actingAs($user)
+        ->get(route('karaoke.projects.player', $project))
+        ->assertForbidden();
+});
+
+it('forbids player access when completed output is missing', function () {
+    $user = createKaraokePlayerUser();
+    $project = createPlayerProject($user);
+    Storage::disk('local')->delete($project->instrumental_path);
+
+    $this->actingAs($user)
+        ->get(route('karaoke.projects.player', $project))
+        ->assertForbidden();
 });
 
 it('passes valid transcript data safely to the player', function () {
@@ -231,19 +271,20 @@ it('returns headers without a body for head requests', function () {
 it('returns 404 when private audio is missing', function () {
     $user = createKaraokePlayerUser();
     $project = createPlayerProject($user);
-    Storage::disk('local')->delete($project->source_path);
+    Storage::disk('local')->delete($project->instrumental_path);
 
     $this->actingAs($user)
         ->get(route('karaoke.projects.audio', $project))
-        ->assertNotFound();
+        ->assertForbidden();
 });
 
-it('shows player link on project details only when transcript is valid', function () {
+it('shows player link on project details only when playback is ready', function () {
     $user = createKaraokePlayerUser();
     $ready = createPlayerProject($user, ['title' => 'Ready Track']);
     $pending = createPlayerProject($user, [
         'title' => 'Pending Track',
         'transcript' => null,
+        'status' => KaraokeProjectStatus::Uploaded,
     ]);
 
     $this->actingAs($user)

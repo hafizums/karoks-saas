@@ -5,7 +5,8 @@
     "dev": "vite",
     "build": "vite build",
     "test:karoks-player": "node --test tests/js/karoks-player.test.js",
-    "test:karoks-editor": "node --test tests/js/karoks-editor.test.js"
+    "test:karoks-editor": "node --test tests/js/karoks-editor.test.js",
+    "test:karoks-processing": "node --test tests/js/karoks-processing.test.js"
   },
   "devDependencies": {
     "@tailwindcss/forms": "^0.5.10",
