@@ -3,11 +3,11 @@
 namespace App\Models;
 
 use App\Enums\KaraokeProjectStatus;
+use App\Support\KaraokeStorage;
 use Database\Factories\KaraokeProjectFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 class KaraokeProject extends Model
@@ -82,11 +82,7 @@ class KaraokeProject extends Model
         });
 
         static::deleting(function (KaraokeProject $project): void {
-            if ($project->source_path) {
-                Storage::disk('local')->delete($project->source_path);
-            }
-
-            Storage::disk('local')->deleteDirectory($project->storageDirectory());
+            KaraokeStorage::deleteProjectFiles($project);
         });
     }
 }

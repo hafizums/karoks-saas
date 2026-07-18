@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\KaraokeStorage;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -72,6 +73,10 @@ class User extends WaveUser
             if (Role::where('name', $defaultRole)->where('guard_name', 'web')->exists()) {
                 $user->assignRole($defaultRole);
             }
+        });
+
+        static::forceDeleting(function (User $user): void {
+            KaraokeStorage::deleteUserFiles($user->id);
         });
     }
 }

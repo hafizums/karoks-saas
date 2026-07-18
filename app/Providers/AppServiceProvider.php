@@ -9,14 +9,12 @@ use Illuminate\Auth\Events\Login;
 use Illuminate\Auth\Events\Logout;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\ServiceProvider;
-use Laravel\Folio\Folio;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -81,26 +79,6 @@ class AppServiceProvider extends ServiceProvider
         });
 
         $this->bootRoute();
-        $this->registerApplicationThemeSupport();
-    }
-
-    private function registerApplicationThemeSupport(): void
-    {
-        $themePath = resource_path('themes/anchor');
-
-        if (! is_dir($themePath)) {
-            return;
-        }
-
-        view()->addNamespace('theme', $themePath);
-        Blade::anonymousComponentPath($themePath.'/components/elements');
-        Blade::anonymousComponentPath($themePath.'/components');
-
-        $pagesPath = $themePath.'/pages';
-
-        if (is_dir($pagesPath) && ! Route::has('changelogs')) {
-            Folio::path($pagesPath);
-        }
     }
 
     private function setSchemaDefaultLength(): void

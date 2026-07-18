@@ -2,9 +2,14 @@
 
 use App\Models\KaraokeProject;
 use App\Models\User;
+use DevDojo\Themes\Models\Theme;
+use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Tests\Support\KaraokeTestTheme;
+
+uses(DatabaseTransactions::class);
 
 function karaokeWavUpload(string $filename = 'sample.wav'): UploadedFile
 {
@@ -37,8 +42,17 @@ function createStoredKaraokeProject(User $user, array $attributes = []): Karaoke
 }
 
 beforeEach(function () {
+    if (! Theme::query()->where('folder', 'anchor')->exists()) {
+        Theme::query()->create([
+            'name' => 'Anchor Theme',
+            'folder' => 'anchor',
+            'active' => true,
+            'version' => 1.0,
+        ]);
+    }
+
+    KaraokeTestTheme::register();
     Storage::fake('local');
-    KaraokeProject::query()->delete();
 });
 
 it('redirects guests from karaoke routes', function () {
@@ -72,7 +86,7 @@ it('creates a database record for a valid audio upload', function () {
 
     $response->assertRedirect();
 
-    $project = KaraokeProject::first();
+    $project = KaraokeProject::query()->where('user_id', $user->id)->first();
 
     expect($project)->not->toBeNull()
         ->and($project->title)->toBe('Demo Song')
@@ -90,7 +104,7 @@ it('stores uploaded audio on the private local disk', function () {
         'rights_confirmed' => '1',
     ]);
 
-    $project = KaraokeProject::first();
+    $project = KaraokeProject::query()->where('user_id', $user->id)->first();
 
     Storage::disk('local')->assertExists($project->source_path);
     expect($project->source_path)->toStartWith('karaoke/'.$user->id.'/');
@@ -105,7 +119,7 @@ it('requires rights confirmation', function () {
         'audio' => karaokeWavUpload(),
     ])->assertSessionHasErrors('rights_confirmed');
 
-    expect(KaraokeProject::count())->toBe(0);
+    expect(KaraokeProject::query()->where('user_id', $user->id)->count())->toBe(0);
 });
 
 it('rejects invalid extensions', function () {
@@ -119,7 +133,7 @@ it('rejects invalid extensions', function () {
         'rights_confirmed' => '1',
     ])->assertSessionHasErrors('audio');
 
-    expect(KaraokeProject::count())->toBe(0);
+    expect(KaraokeProject::query()->where('user_id', $user->id)->count())->toBe(0);
 });
 
 it('rejects oversized files', function () {
@@ -133,7 +147,7 @@ it('rejects oversized files', function () {
         'rights_confirmed' => '1',
     ])->assertSessionHasErrors('audio');
 
-    expect(KaraokeProject::count())->toBe(0);
+    expect(KaraokeProject::query()->where('user_id', $user->id)->count())->toBe(0);
 });
 
 it('forbids viewing another users project', function () {
@@ -165,7 +179,7 @@ it('forbids deleting another users project', function () {
         ->delete(route('karaoke.projects.destroy', $project))
         ->assertForbidden();
 
-    expect(KaraokeProject::count())->toBe(1);
+    expect(KaraokeProject::query()->where('user_id', $userB->id)->count())->toBe(1);
 });
 
 it('deletes private stored files when a project is deleted', function () {
@@ -180,7 +194,21 @@ it('deletes private stored files when a project is deleted', function () {
         ->assertRedirect(route('karaoke.projects.index'));
 
     Storage::disk('local')->assertMissing($path);
-    expect(KaraokeProject::count())->toBe(0);
+    expect(KaraokeProject::query()->whereKey($project->id)->exists())->toBeFalse();
+});
+
+it('deletes private karaoke storage when a user is force deleted', function () {
+    $user = createKaraokeUser();
+    $project = createStoredKaraokeProject($user);
+    $userDirectory = 'karaoke/'.$user->id;
+
+    Storage::disk('local')->assertExists($project->source_path);
+
+    $user->forceDelete();
+
+    Storage::disk('local')->assertMissing($project->source_path);
+    expect(KaraokeProject::query()->whereKey($project->id)->exists())->toBeFalse();
+    expect(Storage::disk('local')->exists($userDirectory))->toBeFalse();
 });
 
 it('uses public ids in project urls', function () {
