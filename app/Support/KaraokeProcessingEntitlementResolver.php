@@ -104,15 +104,16 @@ class KaraokeProcessingEntitlementResolver
             return null;
         }
 
-        $value = $limits[$key];
+        return $this->parseStrictLimitValue($limits[$key]);
+    }
 
-        if (! is_int($value) && ! (is_string($value) && ctype_digit((string) $value))) {
-            if (! is_numeric($value)) {
-                return null;
-            }
+    private function parseStrictLimitValue(mixed $value): ?int
+    {
+        if (! is_int($value)) {
+            return null;
         }
 
-        return (int) $value;
+        return $value;
     }
 
     private function latestActiveSubscription(User $user): ?Subscription

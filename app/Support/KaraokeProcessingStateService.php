@@ -19,6 +19,7 @@ class KaraokeProcessingStateService
         'source_missing',
         'unsupported_audio',
         'cancelled',
+        'usage_unavailable',
     ];
 
     public function __construct(
@@ -179,7 +180,18 @@ class KaraokeProcessingStateService
                 return false;
             }
 
-            $this->usageService->consumeForRun($locked, $runId);
+            if (! $this->usageService->consumeForRun($locked, $runId)) {
+                $locked->forceFill([
+                    'status' => KaraokeProjectStatus::Failed,
+                    'processing_stage' => null,
+                    'progress' => 0,
+                    'processing_failed_at' => now(),
+                    'error_code' => 'usage_unavailable',
+                    'error_message' => 'Processing could not be started because usage accounting is unavailable.',
+                ])->save();
+
+                return false;
+            }
 
             $locked->forceFill([
                 'status' => KaraokeProjectStatus::Processing,
@@ -310,7 +322,7 @@ class KaraokeProcessingStateService
             return false;
         }
 
-        return ! in_array($project->error_code, ['unsupported_audio', 'source_missing', 'cancelled'], true);
+        return ! in_array($project->error_code, ['unsupported_audio', 'source_missing', 'cancelled', 'usage_unavailable'], true);
     }
 
     public function runIsActive(KaraokeProject $project, string $runId): bool

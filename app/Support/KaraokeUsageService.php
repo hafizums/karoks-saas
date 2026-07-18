@@ -115,6 +115,8 @@ class KaraokeUsageService
                 return $existing;
             }
 
+            $this->lockUserForUsage($user);
+
             $entitlement = $this->entitlementResolver->resolve($user);
 
             if ($entitlement['disabled']) {
@@ -131,37 +133,22 @@ class KaraokeUsageService
 
             $idempotencyKey = $this->reserveIdempotencyKey($project->id, $attemptNumber);
 
-            try {
-                return KaraokeUsageRecord::query()->create([
-                    'user_id' => $user->id,
-                    'karaoke_project_id' => $project->id,
-                    'metric' => $metric,
-                    'units' => 1,
-                    'state' => KaraokeUsageRecord::STATE_RESERVED,
-                    'period_start' => $period['start'],
-                    'period_end' => $period['end'],
-                    'idempotency_key' => $idempotencyKey,
-                    'reserved_at' => now(),
-                ]);
-            } catch (QueryException $exception) {
-                if (! $this->isUniqueConstraintViolation($exception)) {
-                    throw $exception;
-                }
-
-                $existing = $this->lockReservedProjectRecord($project);
-
-                if ($existing !== null) {
-                    return $existing;
-                }
-
-                throw new KaraokeUsageLimitExceededException();
-            }
+            return $this->createReservationRecord(
+                $user,
+                $project,
+                $metric,
+                $period,
+                $idempotencyKey,
+                $entitlement,
+            );
         });
     }
 
     public function consumeForRun(KaraokeProject $project, string $runId): bool
     {
         return DB::transaction(function () use ($project, $runId) {
+            $this->lockUserForUsage($project->user);
+
             $record = KaraokeUsageRecord::query()
                 ->where('karaoke_project_id', $project->id)
                 ->whereIn('state', [
@@ -295,6 +282,79 @@ class KaraokeUsageService
         ];
     }
 
+    /**
+     * @param  array{start: CarbonInterface, end: CarbonInterface}  $period
+     * @param  array{limit: int|null, unlimited: bool, disabled: bool}  $entitlement
+     */
+    private function createReservationRecord(
+        User $user,
+        KaraokeProject $project,
+        string $metric,
+        array $period,
+        string $idempotencyKey,
+        array $entitlement,
+    ): KaraokeUsageRecord {
+        for ($attempt = 0; $attempt < 8; $attempt++) {
+            try {
+                return KaraokeUsageRecord::query()->create([
+                    'user_id' => $user->id,
+                    'karaoke_project_id' => $project->id,
+                    'metric' => $metric,
+                    'units' => 1,
+                    'state' => KaraokeUsageRecord::STATE_RESERVED,
+                    'period_start' => $period['start'],
+                    'period_end' => $period['end'],
+                    'idempotency_key' => $idempotencyKey,
+                    'reserved_at' => now(),
+                ]);
+            } catch (QueryException $exception) {
+                if ($this->isUniqueConstraintViolation($exception)) {
+                    $existing = $this->lockReservedProjectRecord($project);
+
+                    if ($existing !== null) {
+                        return $existing;
+                    }
+
+                    throw new KaraokeUsageLimitExceededException();
+                }
+
+                if ($this->isDatabaseLocked($exception)) {
+                    usleep(100000 * ($attempt + 1));
+                    $this->lockUserForUsage($user);
+                    $counts = $this->periodCounts($user, $metric, $period['start'], $period['end'], lock: true);
+
+                    if (! $entitlement['unlimited'] && ($counts['used'] + $counts['reserved']) >= (int) $entitlement['limit']) {
+                        throw new KaraokeUsageLimitExceededException();
+                    }
+
+                    continue;
+                }
+
+                throw $exception;
+            }
+        }
+
+        $this->lockUserForUsage($user);
+        $counts = $this->periodCounts($user, $metric, $period['start'], $period['end'], lock: true);
+
+        if (! $entitlement['unlimited'] && ($counts['used'] + $counts['reserved']) >= (int) $entitlement['limit']) {
+            throw new KaraokeUsageLimitExceededException();
+        }
+
+        throw new KaraokeUsageLimitExceededException();
+    }
+
+    private function lockUserForUsage(User $user): User
+    {
+        $locked = User::query()->whereKey($user->id)->lockForUpdate()->first();
+
+        if ($locked === null) {
+            throw new KaraokeUsageLimitExceededException();
+        }
+
+        return $locked;
+    }
+
     private function lockReservedProjectRecord(KaraokeProject $project): ?KaraokeUsageRecord
     {
         return KaraokeUsageRecord::query()
@@ -338,5 +398,14 @@ class KaraokeUsageService
 
         return in_array($sqlState, ['23000', '23505'], true)
             || str_contains(strtolower($exception->getMessage()), 'unique');
+    }
+
+    private function isDatabaseLocked(QueryException $exception): bool
+    {
+        $message = strtolower($exception->getMessage());
+
+        return str_contains($message, 'database is locked')
+            || str_contains($message, 'database is busy')
+            || str_contains($message, 'locked');
     }
 }

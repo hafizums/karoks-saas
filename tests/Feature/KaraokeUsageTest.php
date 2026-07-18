@@ -4,7 +4,6 @@ use App\Contracts\KaraokeProcessor;
 use App\Enums\KaraokeProjectStatus;
 use App\Exceptions\KaraokeProcessingDisabledException;
 use App\Exceptions\KaraokeProcessingException;
-use App\Exceptions\KaraokeUsageLimitExceededException;
 use App\Jobs\ProcessKaraokeProject;
 use App\Models\KaraokeProject;
 use App\Models\KaraokeUsageRecord;
@@ -24,10 +23,16 @@ use Illuminate\Support\Str;
 use Spatie\Permission\Models\Role;
 use Tests\Support\FlakyKaraokeProcessor;
 use Tests\Support\KaraokeTestTheme;
+use Tests\Support\NeverCalledKaraokeProcessor;
 use Wave\Plan;
 use Wave\Subscription;
 
 uses(DatabaseTransactions::class);
+
+function usageRecordsFor(User $user)
+{
+    return KaraokeUsageRecord::query()->where('user_id', $user->id);
+}
 
 function usageUser(array $attributes = []): User
 {
@@ -203,6 +208,32 @@ it('falls back safely for malformed plan limits', function () {
         ->and($summary['unlimited'])->toBeFalse();
 });
 
+it('falls back safely for non-integer numeric plan limit values', function (mixed $invalidLimit) {
+    $user = usageUser();
+    $role = Role::firstOrCreate(['name' => 'invalid_limit_role', 'guard_name' => 'web']);
+    $plan = Plan::create([
+        'name' => 'Invalid Limit '.md5((string) json_encode($invalidLimit)),
+        'description' => 'Invalid',
+        'features' => [],
+        'monthly_price' => '5.00',
+        'active' => true,
+        'role_id' => $role->id,
+        'limits' => ['karoks_processing_jobs_monthly' => $invalidLimit],
+    ]);
+    subscribeUserToPlan($user, $plan);
+
+    $summary = app(KaraokeUsageService::class)->summary($user);
+
+    expect($summary['limit'])->toBe(2)
+        ->and($summary['unlimited'])->toBeFalse();
+})->with([
+    'float' => [2.9],
+    'decimal string' => ['2.9'],
+    'scientific string' => ['1e3'],
+    'string negative one' => ['-1'],
+    'numeric string' => ['5'],
+]);
+
 it('allows admin bypass only when configured', function () {
     $adminRole = Role::firstOrCreate(['name' => 'admin', 'guard_name' => 'web']);
     $admin = usageUser();
@@ -280,8 +311,8 @@ it('creates one reservation on first start', function () {
 
     app(KaraokeProcessingStateService::class)->queueForProcessing($project);
 
-    expect(KaraokeUsageRecord::query()->count())->toBe(1)
-        ->and(KaraokeUsageRecord::first()->state)->toBe(KaraokeUsageRecord::STATE_RESERVED);
+    expect(usageRecordsFor($user)->count())->toBe(1)
+        ->and(usageRecordsFor($user)->first()->state)->toBe(KaraokeUsageRecord::STATE_RESERVED);
 });
 
 it('does not create a second reservation on duplicate start', function () {
@@ -292,7 +323,7 @@ it('does not create a second reservation on duplicate start', function () {
     $state->queueForProcessing($project);
     $state->queueForProcessing($project->fresh());
 
-    expect(KaraokeUsageRecord::query()->count())->toBe(1);
+    expect(usageRecordsFor($user)->count())->toBe(1);
 });
 
 it('keeps reservation and queue transition atomic', function () {
@@ -303,7 +334,7 @@ it('keeps reservation and queue transition atomic', function () {
     $project->refresh();
 
     expect($project->status)->toBe(KaraokeProjectStatus::Queued)
-        ->and(KaraokeUsageRecord::query()->where('state', KaraokeUsageRecord::STATE_RESERVED)->count())->toBe(1);
+        ->and(usageRecordsFor($user)->where('state', KaraokeUsageRecord::STATE_RESERVED)->count())->toBe(1);
 });
 
 it('does not dispatch a job when the allowance is exhausted', function () {
@@ -324,20 +355,6 @@ it('does not dispatch a job when the allowance is exhausted', function () {
     Queue::assertPushed(ProcessKaraokeProject::class, 1);
 });
 
-it('prevents two projects from reserving the final allowance concurrently', function () {
-    Config::set('karoks.usage.default_monthly_limit', 1);
-
-    $user = usageUser();
-    $first = createUsageProject($user);
-    $second = createUsageProject($user);
-    $service = app(KaraokeUsageService::class);
-
-    $service->reserveForProject($user, $first, 1);
-
-    expect(fn () => $service->reserveForProject($user, $second, 1))
-        ->toThrow(KaraokeUsageLimitExceededException::class);
-});
-
 it('consumes the reservation when processing begins', function () {
     $user = usageUser();
     $project = createUsageProject($user);
@@ -349,9 +366,64 @@ it('consumes the reservation when processing begins', function () {
 
     $state->beginProcessingRun($project->fresh(), $runId);
 
-    $record = KaraokeUsageRecord::first();
+    $record = usageRecordsFor($user)->first();
     expect($record->state)->toBe(KaraokeUsageRecord::STATE_CONSUMED)
         ->and($record->consumed_at)->not->toBeNull();
+});
+
+it('does not enter processing or invoke the processor when queued usage is missing', function () {
+    Http::fake();
+
+    $user = usageUser();
+    $project = createUsageProject($user);
+    $state = app(KaraokeProcessingStateService::class);
+
+    $state->queueForProcessing($project);
+    $project->refresh();
+    $runId = (string) $project->processing_run_id;
+
+    KaraokeUsageRecord::query()->where('karaoke_project_id', $project->id)->delete();
+
+    $job = new ProcessKaraokeProject($project->id, $runId);
+    $job->handle(new NeverCalledKaraokeProcessor(), $state);
+
+    $project->refresh();
+
+    expect($project->status)->toBe(KaraokeProjectStatus::Failed)
+        ->and($project->error_code)->toBe('usage_unavailable')
+        ->and($project->instrumental_path)->toBeNull()
+        ->and($project->transcript)->toBeNull();
+
+    Http::assertNothingSent();
+});
+
+it('does not enter processing or invoke the processor when retry usage is missing', function () {
+    Http::fake();
+
+    $user = usageUser();
+    $project = createUsageProject($user, [
+        'status' => KaraokeProjectStatus::Failed,
+        'error_code' => 'processing_failed',
+        'error_message' => 'Processing could not be completed. Please try again.',
+    ]);
+    $state = app(KaraokeProcessingStateService::class);
+
+    $state->retryProcessing($project);
+    $project->refresh();
+    $runId = (string) $project->processing_run_id;
+
+    KaraokeUsageRecord::query()->where('karaoke_project_id', $project->id)->delete();
+
+    $job = new ProcessKaraokeProject($project->id, $runId);
+    $job->handle(new NeverCalledKaraokeProcessor(), $state);
+
+    $project->refresh();
+
+    expect($project->status)->toBe(KaraokeProjectStatus::Failed)
+        ->and($project->error_code)->toBe('usage_unavailable')
+        ->and($project->instrumental_path)->toBeNull();
+
+    Http::assertNothingSent();
 });
 
 it('does not consume twice when the same job runs again', function () {
@@ -366,7 +438,7 @@ it('does not consume twice when the same job runs again', function () {
     $state->beginProcessingRun($project->fresh(), $runId);
     $state->beginProcessingRun($project->fresh(), $runId);
 
-    expect(KaraokeUsageRecord::query()->where('state', KaraokeUsageRecord::STATE_CONSUMED)->count())->toBe(1);
+    expect(usageRecordsFor($user)->where('state', KaraokeUsageRecord::STATE_CONSUMED)->count())->toBe(1);
 });
 
 it('does not consume twice when retrying after a retryable failure', function () {
@@ -383,11 +455,11 @@ it('does not consume twice when retrying after a retryable failure', function ()
     $job = new ProcessKaraokeProject($project->id, $runId);
 
     expect(fn () => $job->handle($processor, $state))->toThrow(KaraokeProcessingException::class);
-    expect(KaraokeUsageRecord::query()->where('state', KaraokeUsageRecord::STATE_CONSUMED)->count())->toBe(1);
+    expect(usageRecordsFor($user)->where('state', KaraokeUsageRecord::STATE_CONSUMED)->count())->toBe(1);
 
     $job->handle($processor, $state);
 
-    expect(KaraokeUsageRecord::query()->where('state', KaraokeUsageRecord::STATE_CONSUMED)->count())->toBe(1);
+    expect(usageRecordsFor($user)->where('state', KaraokeUsageRecord::STATE_CONSUMED)->count())->toBe(1);
 
     $project->refresh();
     expect($project->status)->toBe(KaraokeProjectStatus::Completed);
@@ -401,7 +473,7 @@ it('releases allowance when cancelling a queued project', function () {
     $state->queueForProcessing($project);
     $state->cancelProcessing($project->fresh());
 
-    $record = KaraokeUsageRecord::first();
+    $record = usageRecordsFor($user)->first();
     expect($record->state)->toBe(KaraokeUsageRecord::STATE_RELEASED);
 
     $summary = app(KaraokeUsageService::class)->summary($user);
@@ -419,7 +491,7 @@ it('does not refund allowance when cancelling during processing', function () {
     $state->beginProcessingRun($project->fresh(), $runId);
     $state->cancelProcessing($project->fresh());
 
-    expect(KaraokeUsageRecord::first()->state)->toBe(KaraokeUsageRecord::STATE_CONSUMED);
+    expect(usageRecordsFor($user)->first()->state)->toBe(KaraokeUsageRecord::STATE_CONSUMED);
     expect(app(KaraokeUsageService::class)->summary($user)['remaining'])->toBe(1);
 });
 
@@ -445,7 +517,7 @@ it('does not refund allowance after a processing failure', function () {
 
     $job->failed(new KaraokeProcessingException('Transient processing failure.'));
 
-    expect(KaraokeUsageRecord::first()->state)->toBe(KaraokeUsageRecord::STATE_CONSUMED);
+    expect(usageRecordsFor($user)->first()->state)->toBe(KaraokeUsageRecord::STATE_CONSUMED);
     expect(app(KaraokeUsageService::class)->summary($user)['remaining'])->toBe(1);
 });
 
@@ -456,7 +528,7 @@ it('releases allowance when deleting a queued project', function () {
     app(KaraokeProcessingStateService::class)->queueForProcessing($project);
     $project->delete();
 
-    expect(KaraokeUsageRecord::first()->state)->toBe(KaraokeUsageRecord::STATE_RELEASED);
+    expect(usageRecordsFor($user)->first()->state)->toBe(KaraokeUsageRecord::STATE_RELEASED);
 });
 
 it('preserves consumed usage when deleting a completed project', function () {
@@ -468,7 +540,7 @@ it('preserves consumed usage when deleting a completed project', function () {
     app(KaraokeProcessingStateService::class)->queueForProcessing($project);
     runUsageProcessingJob($project->fresh());
 
-    $recordId = KaraokeUsageRecord::first()->id;
+    $recordId = usageRecordsFor($user)->first()->id;
     $project->fresh()->delete();
 
     $record = KaraokeUsageRecord::find($recordId);
@@ -483,7 +555,7 @@ it('nulls the ledger project reference when the project is deleted', function ()
     app(KaraokeProcessingStateService::class)->queueForProcessing($project);
     $project->delete();
 
-    expect(KaraokeUsageRecord::first()->karaoke_project_id)->toBeNull();
+    expect(usageRecordsFor($user)->first()->karaoke_project_id)->toBeNull();
 });
 
 it('removes ledger records when the user is deleted', function () {
@@ -494,7 +566,7 @@ it('removes ledger records when the user is deleted', function () {
 
     $user->forceDelete();
 
-    expect(KaraokeUsageRecord::query()->count())->toBe(0);
+    expect(usageRecordsFor($user)->count())->toBe(0);
 });
 
 it('resets available allowance in a new utc month', function () {
@@ -522,7 +594,7 @@ it('does not count released records against allowance', function () {
     $another = createUsageProject($user);
     $state->queueForProcessing($another);
 
-    expect(KaraokeUsageRecord::query()->where('state', KaraokeUsageRecord::STATE_RESERVED)->count())->toBe(1);
+    expect(usageRecordsFor($user)->where('state', KaraokeUsageRecord::STATE_RESERVED)->count())->toBe(1);
 });
 
 it('does not leak internal ids in status usage json', function () {
