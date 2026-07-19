@@ -52,10 +52,9 @@ class RecoverStalledProcessingCommand extends Command
         $candidates = KaraokeProject::query()
             ->where('status', KaraokeProjectStatus::Queued)
             ->whereNotNull('processing_run_id')
+            ->tap(fn ($query) => KaraokeProcessingRecoveryReference::applyStaleScope($query, $threshold))
             ->orderBy('id')
             ->limit($limit)
-            ->get()
-            ->filter(fn (KaraokeProject $project): bool => KaraokeProcessingRecoveryReference::isStale($project, $threshold))
             ->pluck('id');
 
         foreach ($candidates as $projectId) {
@@ -103,10 +102,9 @@ class RecoverStalledProcessingCommand extends Command
         $candidates = KaraokeProject::query()
             ->where('status', KaraokeProjectStatus::Processing)
             ->whereNotNull('processing_run_id')
+            ->tap(fn ($query) => KaraokeProcessingRecoveryReference::applyStaleScope($query, $threshold))
             ->orderBy('id')
             ->limit($limit)
-            ->get()
-            ->filter(fn (KaraokeProject $project): bool => KaraokeProcessingRecoveryReference::isStale($project, $threshold))
             ->pluck('id');
 
         foreach ($candidates as $projectId) {

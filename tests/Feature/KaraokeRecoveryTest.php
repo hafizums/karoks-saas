@@ -253,6 +253,82 @@ describe('karoks:recover-stalled-processing', function () {
         expect($project->fresh()->status)->toBe(KaraokeProjectStatus::Queued);
     });
 
+    it('recovers stale higher-id queued projects even when fresh lower-id rows exceed the limit', function () {
+        Queue::fake();
+
+        $user = recoveryUser();
+        $freshProjects = collect();
+
+        for ($index = 0; $index < 3; $index++) {
+            $freshProjects->push(createRecoveryProject($user, [
+                'status' => KaraokeProjectStatus::Queued,
+                'processing_run_id' => (string) Str::uuid(),
+                'processing_attempts' => 1,
+                'queued_at' => now()->subMinutes(2),
+                'processing_heartbeat_at' => now(),
+            ]));
+        }
+
+        $staleProject = createRecoveryProject($user, [
+            'status' => KaraokeProjectStatus::Queued,
+            'processing_run_id' => (string) Str::uuid(),
+            'processing_attempts' => 1,
+            'queued_at' => now()->subMinutes(30),
+            'processing_heartbeat_at' => null,
+        ]);
+
+        expect($staleProject->id)->toBeGreaterThan($freshProjects->last()->id);
+
+        Artisan::call('karoks:recover-stalled-processing', ['--limit' => 2]);
+
+        Queue::assertPushed(ProcessKaraokeProject::class, function (ProcessKaraokeProject $job) use ($staleProject): bool {
+            return $job->karaokeProjectId === $staleProject->id;
+        });
+
+        foreach ($freshProjects as $freshProject) {
+            expect($freshProject->fresh()->status)->toBe(KaraokeProjectStatus::Queued);
+        }
+    });
+
+    it('recovers stale higher-id processing projects even when fresh lower-id rows exceed the limit', function () {
+        $user = recoveryUser();
+        $freshProjects = collect();
+
+        for ($index = 0; $index < 3; $index++) {
+            $freshProjects->push(createRecoveryProject($user, [
+                'status' => KaraokeProjectStatus::Processing,
+                'processing_run_id' => (string) Str::uuid(),
+                'processing_attempts' => 1,
+                'queued_at' => now()->subHour(),
+                'processing_started_at' => now()->subMinutes(2),
+                'processing_heartbeat_at' => now(),
+                'progress' => 10,
+            ]));
+        }
+
+        $staleProject = createRecoveryProject($user, [
+            'status' => KaraokeProjectStatus::Processing,
+            'processing_run_id' => (string) Str::uuid(),
+            'processing_attempts' => 1,
+            'queued_at' => now()->subHour(),
+            'processing_started_at' => now()->subMinutes(30),
+            'processing_heartbeat_at' => null,
+            'progress' => 40,
+        ]);
+
+        expect($staleProject->id)->toBeGreaterThan($freshProjects->last()->id);
+
+        Artisan::call('karoks:recover-stalled-processing', ['--limit' => 2]);
+
+        $staleProject->refresh();
+        expect($staleProject->status)->toBe(KaraokeProjectStatus::Failed)
+            ->and($staleProject->error_code)->toBe('processing_stalled');
+
+        foreach ($freshProjects as $freshProject) {
+            expect($freshProject->fresh()->status)->toBe(KaraokeProjectStatus::Processing);
+        }
+    });
+
     it('ignores terminal and superseded projects', function () {
         Queue::fake();
 
