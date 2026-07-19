@@ -39,6 +39,13 @@
 
             @include('theme::karaoke.partials.usage-summary')
 
+            @include('theme::karaoke.partials.public-sharing-panel', [
+                'project' => $project,
+                'isReadyForPlayback' => $isReadyForPlayback,
+                'activeShare' => $activeShare,
+                'shareUrl' => $shareUrl,
+            ])
+
             <div class="p-6 space-y-4 border rounded-xl border-zinc-200 dark:border-zinc-700">
                 <h4 class="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Upload information</h4>
                 <dl class="grid gap-4 text-sm sm:grid-cols-2">

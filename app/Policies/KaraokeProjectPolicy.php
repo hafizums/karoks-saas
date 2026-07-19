@@ -102,6 +102,21 @@ class KaraokeProjectPolicy
         return $this->owns($user, $karaokeProject);
     }
 
+    public function share(User $user, KaraokeProject $karaokeProject): bool
+    {
+        return $this->owns($user, $karaokeProject) && $karaokeProject->isReadyForPlayback();
+    }
+
+    public function rotateShare(User $user, KaraokeProject $karaokeProject): bool
+    {
+        return $this->share($user, $karaokeProject);
+    }
+
+    public function revokeShare(User $user, KaraokeProject $karaokeProject): bool
+    {
+        return $this->share($user, $karaokeProject);
+    }
+
     private function owns(User $user, KaraokeProject $karaokeProject): bool
     {
         return (int) $karaokeProject->user_id === (int) $user->id;

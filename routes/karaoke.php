@@ -3,7 +3,22 @@
 use App\Http\Controllers\KaraokeProjectController;
 use App\Http\Controllers\KaraokeProjectEditorController;
 use App\Http\Controllers\KaraokeProjectProcessingController;
+use App\Http\Controllers\KaraokeProjectShareController;
+use App\Http\Controllers\KaraokePublicShareController;
 use Illuminate\Support\Facades\Route;
+
+Route::prefix('karaoke/shared')
+    ->name('karaoke.shared.')
+    ->middleware(['karoks.public-share-headers'])
+    ->group(function (): void {
+        Route::get('/{share}/{token}', [KaraokePublicShareController::class, 'show'])
+            ->middleware('throttle:karoks-public-player')
+            ->name('show');
+
+        Route::match(['get', 'head'], '/{share}/{token}/audio', [KaraokePublicShareController::class, 'audio'])
+            ->middleware('throttle:karoks-public-audio')
+            ->name('audio');
+    });
 
 Route::middleware('auth')
     ->prefix('karaoke')
@@ -32,6 +47,14 @@ Route::middleware('auth')
         Route::get('/{karaokeProject}/status', [KaraokeProjectProcessingController::class, 'status'])
             ->middleware('throttle:karoks-processing')
             ->name('status');
+        Route::post('/{karaokeProject}/share', [KaraokeProjectShareController::class, 'store'])
+            ->middleware('throttle:karoks-share-manage')
+            ->name('share.store');
+        Route::post('/{karaokeProject}/share/rotate', [KaraokeProjectShareController::class, 'rotate'])
+            ->middleware('throttle:karoks-share-manage')
+            ->name('share.rotate');
+        Route::delete('/{karaokeProject}/share', [KaraokeProjectShareController::class, 'destroy'])
+            ->name('share.destroy');
         Route::get('/{karaokeProject}/player', [KaraokeProjectController::class, 'player'])->name('player');
         Route::match(['get', 'head'], '/{karaokeProject}/audio', [KaraokeProjectController::class, 'audio'])->name('audio');
         Route::get('/{karaokeProject}/source', [KaraokeProjectController::class, 'source'])->name('source');

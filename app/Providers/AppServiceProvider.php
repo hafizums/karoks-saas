@@ -106,5 +106,24 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('karoks-processing', function (Request $request) {
             return Limit::perMinute(120)->by($request->user()?->id ?: $request->ip());
         });
+
+        RateLimiter::for('karoks-public-player', function (Request $request) {
+            return Limit::perMinute(30)->by($request->ip());
+        });
+
+        RateLimiter::for('karoks-public-audio', function (Request $request) {
+            $shareId = (string) $request->route('share');
+            $token = (string) $request->route('token');
+            $credentialKey = hash('sha256', $shareId.':'.$token);
+
+            return Limit::perMinute(240)->by($request->ip().':'.$credentialKey);
+        });
+
+        RateLimiter::for('karoks-share-manage', function (Request $request) {
+            $userId = $request->user()?->id ?? 'guest';
+            $projectKey = (string) ($request->route('karaokeProject')?->public_id ?? 'unknown');
+
+            return Limit::perMinute(10)->by($userId.':'.$projectKey);
+        });
     }
 }

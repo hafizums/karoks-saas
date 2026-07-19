@@ -36,6 +36,10 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->web(\RalphJSmit\Livewire\Urls\Middleware\LivewireUrlsMiddleware::class);
 
         $middleware->throttleApi();
+
+        $middleware->alias([
+            'karoks.public-share-headers' => \App\Http\Middleware\KaraokePublicShareHeaders::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
         //
