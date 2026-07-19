@@ -6,6 +6,7 @@ use App\Enums\KaraokeProcessingNotificationEvent;
 use App\Enums\KaraokeProjectStatus;
 use App\Jobs\ProcessKaraokeProject;
 use App\Models\KaraokeProject;
+use App\Support\Karaoke\Processing\KaraokeProcessingRecoveryReference;
 use App\Support\KaraokeProcessingStateService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Carbon;
@@ -51,10 +52,10 @@ class RecoverStalledProcessingCommand extends Command
         $candidates = KaraokeProject::query()
             ->where('status', KaraokeProjectStatus::Queued)
             ->whereNotNull('processing_run_id')
-            ->whereNotNull('processing_heartbeat_at')
-            ->where('processing_heartbeat_at', '<=', $threshold)
             ->orderBy('id')
             ->limit($limit)
+            ->get()
+            ->filter(fn (KaraokeProject $project): bool => KaraokeProcessingRecoveryReference::isStale($project, $threshold))
             ->pluck('id');
 
         foreach ($candidates as $projectId) {
@@ -69,7 +70,7 @@ class RecoverStalledProcessingCommand extends Command
                     return false;
                 }
 
-                if ($locked->processing_heartbeat_at === null || $locked->processing_heartbeat_at->gt($threshold)) {
+                if (! KaraokeProcessingRecoveryReference::isStale($locked, $threshold)) {
                     return false;
                 }
 
@@ -102,10 +103,10 @@ class RecoverStalledProcessingCommand extends Command
         $candidates = KaraokeProject::query()
             ->where('status', KaraokeProjectStatus::Processing)
             ->whereNotNull('processing_run_id')
-            ->whereNotNull('processing_heartbeat_at')
-            ->where('processing_heartbeat_at', '<=', $threshold)
             ->orderBy('id')
             ->limit($limit)
+            ->get()
+            ->filter(fn (KaraokeProject $project): bool => KaraokeProcessingRecoveryReference::isStale($project, $threshold))
             ->pluck('id');
 
         foreach ($candidates as $projectId) {
@@ -120,7 +121,7 @@ class RecoverStalledProcessingCommand extends Command
                     return false;
                 }
 
-                if ($locked->processing_heartbeat_at === null || $locked->processing_heartbeat_at->gt($threshold)) {
+                if (! KaraokeProcessingRecoveryReference::isStale($locked, $threshold)) {
                     return false;
                 }
 

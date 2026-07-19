@@ -2,6 +2,7 @@
 
 namespace App\Support\Karaoke\Processing;
 
+use App\Enums\KaraokeProjectStatus;
 use App\Models\KaraokeProject;
 use Illuminate\Support\Facades\DB;
 
@@ -25,11 +26,19 @@ class KaraokeProcessingCheckpointService
 
     public function bindRun(KaraokeProject $project, string $runId, string $driver): void
     {
-        $project->forceFill([
-            'processing_driver' => $driver,
-            'provider_checkpoint_run_id' => $runId,
-            'provider_checkpoint_attempt' => (int) $project->processing_attempts,
-        ])->save();
+        DB::transaction(function () use ($project, $runId, $driver): void {
+            $locked = KaraokeProject::query()->whereKey($project->id)->lockForUpdate()->first();
+
+            if ($locked === null || ! $this->canBindRun($locked, $runId)) {
+                return;
+            }
+
+            $locked->forceFill([
+                'processing_driver' => $driver,
+                'provider_checkpoint_run_id' => $runId,
+                'provider_checkpoint_attempt' => (int) $locked->processing_attempts,
+            ])->save();
+        });
     }
 
     public function savePredictionId(KaraokeProject $project, string $runId, string $predictionId): void
@@ -37,7 +46,7 @@ class KaraokeProcessingCheckpointService
         DB::transaction(function () use ($project, $runId, $predictionId): void {
             $locked = KaraokeProject::query()->whereKey($project->id)->lockForUpdate()->first();
 
-            if ($locked === null || ! $this->checkpointMatches($locked, $runId)) {
+            if ($locked === null || ! $this->canWriteCheckpoint($locked, $runId)) {
                 return;
             }
 
@@ -56,7 +65,7 @@ class KaraokeProcessingCheckpointService
         DB::transaction(function () use ($project, $runId): void {
             $locked = KaraokeProject::query()->whereKey($project->id)->lockForUpdate()->first();
 
-            if ($locked === null || ! $this->checkpointMatches($locked, $runId)) {
+            if ($locked === null || ! $this->canWriteCheckpoint($locked, $runId)) {
                 return;
             }
 
@@ -78,7 +87,7 @@ class KaraokeProcessingCheckpointService
         DB::transaction(function () use ($project, $runId, $transcript): void {
             $locked = KaraokeProject::query()->whereKey($project->id)->lockForUpdate()->first();
 
-            if ($locked === null || ! $this->checkpointMatches($locked, $runId)) {
+            if ($locked === null || ! $this->canWriteCheckpoint($locked, $runId)) {
                 return;
             }
 
@@ -96,7 +105,7 @@ class KaraokeProcessingCheckpointService
         DB::transaction(function () use ($project, $runId): void {
             $locked = KaraokeProject::query()->whereKey($project->id)->lockForUpdate()->first();
 
-            if ($locked === null || ! $this->checkpointMatches($locked, $runId)) {
+            if ($locked === null || ! $this->canWriteCheckpoint($locked, $runId)) {
                 return;
             }
 
@@ -113,7 +122,7 @@ class KaraokeProcessingCheckpointService
         DB::transaction(function () use ($project, $runId): void {
             $locked = KaraokeProject::query()->whereKey($project->id)->lockForUpdate()->first();
 
-            if ($locked === null || ! $this->checkpointMatches($locked, $runId)) {
+            if ($locked === null || ! $this->canClearCheckpoint($locked, $runId)) {
                 return;
             }
 
@@ -142,6 +151,10 @@ class KaraokeProcessingCheckpointService
 
     public function hasReusableSeparation(KaraokeProject $project): bool
     {
+        if (! $this->canReuseCheckpoint($project)) {
+            return false;
+        }
+
         return is_string($project->wavespeed_prediction_id)
             && $project->wavespeed_prediction_id !== ''
             && $project->wavespeed_prediction_failed_at === null;
@@ -152,6 +165,10 @@ class KaraokeProcessingCheckpointService
      */
     public function reusableTranscript(KaraokeProject $project): ?array
     {
+        if (! $this->canReuseCheckpoint($project)) {
+            return null;
+        }
+
         $checkpoint = $project->provider_transcript_checkpoint;
 
         if (! is_array($checkpoint)) {
@@ -163,19 +180,51 @@ class KaraokeProcessingCheckpointService
 
     public function checkpointMatches(KaraokeProject $project, string $runId): bool
     {
+        return $this->canWriteCheckpoint($project, $runId);
+    }
+
+    private function canBindRun(KaraokeProject $project, string $runId): bool
+    {
+        return $project->status === KaraokeProjectStatus::Processing
+            && $project->processing_run_id === $runId;
+    }
+
+    private function canWriteCheckpoint(KaraokeProject $project, string $runId): bool
+    {
+        if ($project->status !== KaraokeProjectStatus::Processing) {
+            return false;
+        }
+
         if ($project->processing_run_id !== $runId) {
             return false;
         }
 
-        if ($project->provider_checkpoint_run_id !== null && $project->provider_checkpoint_run_id !== $runId) {
+        if ($project->provider_checkpoint_run_id === null || $project->provider_checkpoint_run_id !== $runId) {
             return false;
         }
 
-        if ($project->provider_checkpoint_attempt !== null
-            && (int) $project->provider_checkpoint_attempt !== (int) $project->processing_attempts) {
+        if ($project->provider_checkpoint_attempt === null) {
             return false;
         }
 
-        return true;
+        return (int) $project->provider_checkpoint_attempt === (int) $project->processing_attempts;
+    }
+
+    private function canClearCheckpoint(KaraokeProject $project, string $runId): bool
+    {
+        return $project->processing_run_id === $runId;
+    }
+
+    private function canReuseCheckpoint(KaraokeProject $project): bool
+    {
+        if ($project->status !== KaraokeProjectStatus::Processing) {
+            return false;
+        }
+
+        if ($project->processing_run_id === null) {
+            return false;
+        }
+
+        return $this->canWriteCheckpoint($project, (string) $project->processing_run_id);
     }
 }

@@ -198,6 +198,61 @@ describe('karoks:recover-stalled-processing', function () {
         expect($project->fresh()->status)->toBe(KaraokeProjectStatus::Queued);
     });
 
+    it('recovers legacy queued projects using queued_at when heartbeat is null', function () {
+        Queue::fake();
+
+        $user = recoveryUser();
+        $project = createRecoveryProject($user, [
+            'status' => KaraokeProjectStatus::Queued,
+            'processing_run_id' => (string) Str::uuid(),
+            'processing_attempts' => 1,
+            'queued_at' => now()->subMinutes(30),
+            'processing_heartbeat_at' => null,
+        ]);
+
+        Artisan::call('karoks:recover-stalled-processing');
+
+        Queue::assertPushed(ProcessKaraokeProject::class, 1);
+        expect($project->fresh()->status)->toBe(KaraokeProjectStatus::Queued);
+    });
+
+    it('recovers legacy processing projects using processing_started_at when heartbeat is null', function () {
+        $user = recoveryUser();
+        $project = createRecoveryProject($user, [
+            'status' => KaraokeProjectStatus::Processing,
+            'processing_run_id' => (string) Str::uuid(),
+            'processing_attempts' => 1,
+            'queued_at' => now()->subHour(),
+            'processing_started_at' => now()->subMinutes(30),
+            'processing_heartbeat_at' => null,
+            'progress' => 20,
+        ]);
+
+        Artisan::call('karoks:recover-stalled-processing');
+
+        $project->refresh();
+        expect($project->status)->toBe(KaraokeProjectStatus::Failed)
+            ->and($project->error_code)->toBe('processing_stalled');
+    });
+
+    it('ignores fresh legacy queued projects with recent queued_at and null heartbeat', function () {
+        Queue::fake();
+
+        $user = recoveryUser();
+        $project = createRecoveryProject($user, [
+            'status' => KaraokeProjectStatus::Queued,
+            'processing_run_id' => (string) Str::uuid(),
+            'processing_attempts' => 1,
+            'queued_at' => now()->subMinutes(2),
+            'processing_heartbeat_at' => null,
+        ]);
+
+        Artisan::call('karoks:recover-stalled-processing');
+
+        Queue::assertNothingPushed();
+        expect($project->fresh()->status)->toBe(KaraokeProjectStatus::Queued);
+    });
+
     it('ignores terminal and superseded projects', function () {
         Queue::fake();
 
