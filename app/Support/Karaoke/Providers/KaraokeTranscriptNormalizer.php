@@ -29,7 +29,23 @@ class KaraokeTranscriptNormalizer
         }
 
         $rawWords = is_array($response['words'] ?? null) ? $response['words'] : [];
+        $durationLimit = $durationSeconds + 0.05;
         $words = [];
+
+        foreach ($rawWords as $entry) {
+            if (! is_array($entry) || ($entry['type'] ?? null) !== 'word') {
+                continue;
+            }
+
+            $start = $this->asFiniteNumber($entry['start'] ?? null);
+            $end = $this->asFiniteNumber($entry['end'] ?? null);
+
+            if ($start !== null && $end !== null && $end > $start) {
+                $durationLimit = max($durationLimit, $end + 0.05);
+            }
+        }
+
+        $effectiveDurationSeconds = $durationLimit - 0.05;
 
         foreach ($rawWords as $entry) {
             if (! is_array($entry) || ($entry['type'] ?? null) !== 'word') {
@@ -45,14 +61,14 @@ class KaraokeTranscriptNormalizer
             $start = $this->asFiniteNumber($entry['start'] ?? null);
             $end = $this->asFiniteNumber($entry['end'] ?? null);
 
-            if ($start === null || $end === null || ! ($start >= 0 && $start < $end && $end <= $durationSeconds + 0.05)) {
+            if ($start === null || $end === null || ! ($start >= 0 && $start < $end && $end <= $durationLimit)) {
                 continue;
             }
 
             $words[] = [
                 'text' => $text,
                 'start' => round($start, 3),
-                'end' => round(min($end, $durationSeconds), 3),
+                'end' => round(min($end, $effectiveDurationSeconds), 3),
             ];
         }
 

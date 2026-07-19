@@ -139,17 +139,19 @@ class KaraokeAudioDurationInspector
         }
 
         try {
-            $header = fread($handle, 10);
+            $offset = $this->mp3AudioStartOffset($handle);
 
-            if ($header === false) {
+            fseek($handle, $offset);
+            $headerWindow = fread($handle, 2048);
+
+            if ($headerWindow === false || strlen($headerWindow) < 4) {
                 throw new RuntimeException('Invalid mp3.');
             }
 
-            $offset = 0;
+            $vbrDuration = $this->durationFromMp3VbrHeader($headerWindow);
 
-            if (str_starts_with($header, 'ID3') && strlen($header) >= 10) {
-                $sizeBytes = (ord($header[6]) << 21) | (ord($header[7]) << 14) | (ord($header[8]) << 7) | ord($header[9]);
-                $offset = 10 + $sizeBytes;
+            if ($vbrDuration !== null) {
+                return $vbrDuration;
             }
 
             fseek($handle, $offset);
@@ -172,51 +174,18 @@ class KaraokeAudioDurationInspector
                     continue;
                 }
 
-                $version = (ord($sync[1]) >> 3) & 0x03;
-                $layer = (ord($sync[1]) >> 1) & 0x03;
-                $bitrateIndex = (ord($sync[2]) >> 4) & 0x0F;
-                $sampleRateIndex = (ord($sync[2]) >> 2) & 0x03;
-                $padding = (ord($sync[2]) >> 1) & 0x01;
+                $frameInfo = $this->parseMp3FrameHeader($sync);
 
-                if ($layer !== 0x01 || $bitrateIndex === 0 || $bitrateIndex === 15 || $sampleRateIndex === 3) {
+                if ($frameInfo === null) {
                     fseek($handle, -3, SEEK_CUR);
 
                     continue;
                 }
 
-                $bitrateTable = [
-                    1 => [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448],
-                    2 => [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384],
-                    3 => [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
-                ];
-                $sampleRateTable = [
-                    1 => [44100, 48000, 32000],
-                    2 => [22050, 24000, 16000],
-                    3 => [11025, 12000, 8000],
-                ];
-
-                $bitrateKbps = $bitrateTable[$version][$bitrateIndex] ?? 0;
-                $frameSampleRate = $sampleRateTable[$version][$sampleRateIndex] ?? 0;
-
-                if ($bitrateKbps <= 0 || $frameSampleRate <= 0) {
-                    fseek($handle, -3, SEEK_CUR);
-
-                    continue;
-                }
-
-                $sampleRate = $frameSampleRate;
-                $frameLength = (int) floor((144000 * $bitrateKbps) / $frameSampleRate) + $padding;
-
-                if ($frameLength <= 0) {
-                    fseek($handle, -3, SEEK_CUR);
-
-                    continue;
-                }
-
-                $samplesInFrame = $version === 3 ? 384 : 1152;
-                $totalSamples += $samplesInFrame;
+                $sampleRate = $frameInfo['sample_rate'];
+                $totalSamples += $frameInfo['samples_per_frame'];
                 $frames++;
-                fseek($handle, $frameLength - 4, SEEK_CUR);
+                fseek($handle, $frameInfo['frame_length'] - 4, SEEK_CUR);
             }
 
             if ($sampleRate === null || $totalSamples <= 0) {
@@ -227,6 +196,138 @@ class KaraokeAudioDurationInspector
         } finally {
             fclose($handle);
         }
+    }
+
+    /**
+     * @param  resource  $handle
+     */
+    private function mp3AudioStartOffset($handle): int
+    {
+        $header = fread($handle, 10);
+
+        if ($header === false) {
+            throw new RuntimeException('Invalid mp3.');
+        }
+
+        $offset = 0;
+
+        if (str_starts_with($header, 'ID3') && strlen($header) >= 10) {
+            $sizeBytes = (ord($header[6]) << 21) | (ord($header[7]) << 14) | (ord($header[8]) << 7) | ord($header[9]);
+            $offset = 10 + $sizeBytes;
+        }
+
+        return $offset;
+    }
+
+    private function durationFromMp3VbrHeader(string $headerWindow): ?float
+    {
+        foreach (['Xing', 'Info'] as $tag) {
+            $tagOffset = strpos($headerWindow, $tag);
+
+            if ($tagOffset === false || strlen($headerWindow) < $tagOffset + 12) {
+                continue;
+            }
+
+            $flags = unpack('N', substr($headerWindow, $tagOffset + 4, 4))[1] ?? 0;
+
+            if (($flags & 0x01) === 0) {
+                continue;
+            }
+
+            $frameCount = unpack('N', substr($headerWindow, $tagOffset + 8, 4))[1] ?? 0;
+
+            if ($frameCount <= 0) {
+                continue;
+            }
+
+            $frameInfo = $this->parseMp3FrameHeader(substr($headerWindow, 0, 4));
+
+            if ($frameInfo === null) {
+                continue;
+            }
+
+            return ($frameCount * $frameInfo['samples_per_frame']) / $frameInfo['sample_rate'];
+        }
+
+        $tagOffset = strpos($headerWindow, 'VBRI');
+
+        if ($tagOffset !== false && strlen($headerWindow) >= $tagOffset + 18) {
+            $frameCount = unpack('N', substr($headerWindow, $tagOffset + 14, 4))[1] ?? 0;
+            $frameInfo = $this->parseMp3FrameHeader(substr($headerWindow, 0, 4));
+
+            if ($frameCount > 0 && $frameInfo !== null) {
+                return ($frameCount * $frameInfo['samples_per_frame']) / $frameInfo['sample_rate'];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array{sample_rate: int, samples_per_frame: int, frame_length: int}|null
+     */
+    private function parseMp3FrameHeader(string $sync): ?array
+    {
+        if (strlen($sync) < 4 || (ord($sync[0]) & 0xFF) !== 0xFF || (ord($sync[1]) & 0xE0) !== 0xE0) {
+            return null;
+        }
+
+        $version = (ord($sync[1]) >> 3) & 0x03;
+        $layer = (ord($sync[1]) >> 1) & 0x03;
+        $bitrateIndex = (ord($sync[2]) >> 4) & 0x0F;
+        $sampleRateIndex = (ord($sync[2]) >> 2) & 0x03;
+        $padding = (ord($sync[2]) >> 1) & 0x01;
+
+        if ($layer !== 0x01 || $bitrateIndex === 0 || $bitrateIndex === 15 || $sampleRateIndex === 3) {
+            return null;
+        }
+
+        $bitrateTable = [
+            1 => [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448],
+            2 => [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384],
+            3 => [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+        ];
+        $sampleRateTable = [
+            1 => [44100, 48000, 32000],
+            2 => [22050, 24000, 16000],
+            3 => [11025, 12000, 8000],
+        ];
+
+        $tableKey = match ($version) {
+            3 => 1,
+            2 => 2,
+            0 => 3,
+            default => null,
+        };
+
+        if ($tableKey === null) {
+            return null;
+        }
+
+        $bitrateKbps = $bitrateTable[$tableKey][$bitrateIndex] ?? 0;
+        $frameSampleRate = $sampleRateTable[$tableKey][$sampleRateIndex] ?? 0;
+
+        if ($bitrateKbps <= 0 || $frameSampleRate <= 0) {
+            return null;
+        }
+
+        $frameLength = (int) floor((144000 * $bitrateKbps) / $frameSampleRate) + $padding;
+
+        if ($frameLength <= 0) {
+            return null;
+        }
+
+        $samplesPerFrame = match ($layer) {
+            0x01 => $version === 3 ? 1152 : 576,
+            0x02 => 1152,
+            default => 384,
+        };
+
+        return [
+            'sample_rate' => $frameSampleRate,
+            'samples_per_frame' => $samplesPerFrame,
+            'frame_length' => $frameLength,
+        ];
     }
 
     private function durationFromFlac(string $path): ?float
