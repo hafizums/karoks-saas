@@ -7,6 +7,7 @@ use App\Models\KaraokeProject;
 use App\Models\KaraokeProjectShare;
 use App\Models\User;
 use Illuminate\Contracts\Encryption\DecryptException;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -23,7 +24,7 @@ class KaraokeProjectShareService
     ): array {
         $this->assertOwnerCanShare($project, $user);
 
-        return DB::transaction(function () use ($project, $user, $expiration): array {
+        return $this->runShareTransaction(function () use ($project, $user, $expiration): array {
             KaraokeProject::query()
                 ->whereKey($project->getKey())
                 ->lockForUpdate()
@@ -61,7 +62,7 @@ class KaraokeProjectShareService
     {
         $this->assertOwnerCanShare($project, $user);
 
-        return DB::transaction(function () use ($project, $user): array {
+        return $this->runShareTransaction(function () use ($project, $user): array {
             KaraokeProject::query()
                 ->whereKey($project->getKey())
                 ->lockForUpdate()
@@ -97,7 +98,7 @@ class KaraokeProjectShareService
     {
         $this->assertOwnerCanShare($project, $user);
 
-        DB::transaction(function () use ($project, $user): void {
+        $this->runShareTransaction(function () use ($project, $user): void {
             KaraokeProject::query()
                 ->whereKey($project->getKey())
                 ->lockForUpdate()
@@ -240,5 +241,40 @@ class KaraokeProjectShareService
                 'share' => 'Processing must complete before this project can be shared.',
             ]);
         }
+    }
+
+    /**
+     * @template TReturn
+     *
+     * @param  callable(): TReturn  $callback
+     * @return TReturn
+     */
+    private function runShareTransaction(callable $callback): mixed
+    {
+        $attempts = 0;
+        $maxAttempts = 5;
+
+        while (true) {
+            try {
+                return DB::transaction($callback);
+            } catch (ValidationException $exception) {
+                throw $exception;
+            } catch (QueryException $exception) {
+                if (! $this->isSqliteBusyException($exception) || ++$attempts >= $maxAttempts) {
+                    throw $exception;
+                }
+
+                usleep(10_000 * $attempts);
+            }
+        }
+    }
+
+    private function isSqliteBusyException(QueryException $exception): bool
+    {
+        $message = strtolower($exception->getMessage());
+
+        return str_contains($message, 'database is locked')
+            || str_contains($message, 'database table is locked')
+            || str_contains($message, 'sqlite_busy');
     }
 }

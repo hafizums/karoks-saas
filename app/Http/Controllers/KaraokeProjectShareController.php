@@ -17,7 +17,7 @@ class KaraokeProjectShareController extends Controller
     ): RedirectResponse {
         $this->authorize('share', $karaokeProject);
 
-        $result = $shareService->createShare(
+        $shareService->createShare(
             $karaokeProject,
             $request->user(),
             $request->expirationOption(),
@@ -25,8 +25,7 @@ class KaraokeProjectShareController extends Controller
 
         return redirect()
             ->route('karaoke.projects.show', $karaokeProject)
-            ->with('success', 'Public sharing link created.')
-            ->with('share_url', $result['url']);
+            ->with('success', 'Public sharing link created.');
     }
 
     public function rotate(
@@ -36,12 +35,11 @@ class KaraokeProjectShareController extends Controller
     ): RedirectResponse {
         $this->authorize('rotateShare', $karaokeProject);
 
-        $result = $shareService->rotateShare($karaokeProject, $request->user());
+        $shareService->rotateShare($karaokeProject, $request->user());
 
         return redirect()
             ->route('karaoke.projects.show', $karaokeProject)
-            ->with('success', 'Public sharing link rotated. Previous links no longer work.')
-            ->with('share_url', $result['url']);
+            ->with('success', 'Public sharing link rotated. Previous links no longer work.');
     }
 
     public function destroy(

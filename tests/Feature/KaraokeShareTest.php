@@ -6,10 +6,8 @@ use App\Models\KaraokeProjectShare;
 use App\Support\Karaoke\KaraokeProjectShareService;
 use DevDojo\Themes\Models\Theme;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Validation\ValidationException;
 use Tests\Support\KaraokeShareTestHelpers;
 use Tests\Support\KaraokeTestTheme;
 
@@ -91,7 +89,7 @@ it('allows a ready owner to create a share', function () {
         ->post(route('karaoke.projects.share.store', $project), $this->shareFormPayload());
 
     $response->assertRedirect(route('karaoke.projects.show', $project));
-    $response->assertSessionHas('share_url');
+    $response->assertSessionMissing('share_url');
 
     $share = KaraokeProjectShare::query()->where('karaoke_project_id', $project->id)->first();
     expect($share)->not->toBeNull();
@@ -132,9 +130,13 @@ it('does not store the raw token in the database', function () {
     $response = $this->actingAs($user)
         ->post(route('karaoke.projects.share.store', $project), $this->shareFormPayload());
 
-    $url = (string) $response->getSession()->get('share_url');
-    $token = $this->extractTokenFromShareUrl($url);
+    $response->assertSessionMissing('share_url');
+    expect(collect($response->getSession()->all())->flatten()->join(' '))->not->toMatch('/\/karaoke\/shared\//');
+
     $share = KaraokeProjectShare::query()->firstOrFail();
+    $shareUrl = app(KaraokeProjectShareService::class)->ownerShareUrl($share);
+    expect($shareUrl)->not->toBeNull();
+    $token = $this->extractTokenFromShareUrl((string) $shareUrl);
 
     expect($token)->not->toBeEmpty();
     expect($share->token_hash)->not->toBe($token);
@@ -194,7 +196,10 @@ it('rotates a share and invalidates the previous token', function () {
     $response = $this->actingAs($user)
         ->post(route('karaoke.projects.share.rotate', $project), ['sharing_confirmation' => '1']);
 
-    $newUrl = (string) $response->getSession()->get('share_url');
+    $response->assertSessionMissing('share_url');
+
+    $share = KaraokeProjectShare::query()->whereKey($initial['share']->id)->firstOrFail();
+    $newUrl = (string) app(KaraokeProjectShareService::class)->ownerShareUrl($share);
     $newToken = $this->extractTokenFromShareUrl($newUrl);
 
     $this->get(route('karaoke.shared.show', [
@@ -265,17 +270,33 @@ it('removes shares when a user is force deleted', function () {
     expect(KaraokeProjectShare::query()->whereKey($shareId)->exists())->toBeFalse();
 });
 
-it('locks concurrent share creation to a single active link', function () {
+it('does not place share urls or tokens in session when creating a link', function () {
     $user = $this->createShareUser();
     $project = $this->createShareReadyProject($user);
-    $service = app(KaraokeProjectShareService::class);
 
-    DB::transaction(function () use ($service, $project, $user): void {
-        $service->createShare($project, $user, KaraokeShareExpirationOption::Days7);
+    $response = $this->actingAs($user)
+        ->post(route('karaoke.projects.share.store', $project), $this->shareFormPayload());
 
-        expect(fn () => $service->createShare($project, $user, KaraokeShareExpirationOption::Days7))
-            ->toThrow(ValidationException::class);
-    });
+    $sessionPayload = json_encode($response->getSession()->all());
+
+    $response->assertSessionMissing('share_url');
+    expect($sessionPayload)->not->toContain('/karaoke/shared/');
+    expect($sessionPayload)->not->toMatch('/"token"/');
+});
+
+it('does not place share urls or tokens in session when rotating a link', function () {
+    $user = $this->createShareUser();
+    $project = $this->createShareReadyProject($user);
+    $this->createShareForProject($project, $user);
+
+    $response = $this->actingAs($user)
+        ->post(route('karaoke.projects.share.rotate', $project), ['sharing_confirmation' => '1']);
+
+    $sessionPayload = json_encode($response->getSession()->all());
+
+    $response->assertSessionMissing('share_url');
+    expect($sessionPayload)->not->toContain('/karaoke/shared/');
+    expect($sessionPayload)->not->toMatch('/"token"/');
 });
 
 it('allows owner to inspect share status on the project page', function () {
@@ -304,7 +325,7 @@ it('fails safely when token decryption fails during owner url generation', funct
     $this->actingAs($user)
         ->post(route('karaoke.projects.share.rotate', $project), ['sharing_confirmation' => '1'])
         ->assertRedirect(route('karaoke.projects.show', $project))
-        ->assertSessionHas('share_url');
+        ->assertSessionMissing('share_url');
 });
 
 it('stores expiration according to the selected option', function () {
@@ -316,7 +337,9 @@ it('stores expiration according to the selected option', function () {
         'expires_in' => 'never',
     ]);
 
-    $share = KaraokeProjectShare::query()->firstOrFail();
+    $share = KaraokeProjectShare::query()
+        ->where('karaoke_project_id', $project->id)
+        ->firstOrFail();
     expect($share->expires_at)->toBeNull();
 });
 

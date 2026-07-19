@@ -6,9 +6,9 @@ use App\Enums\KaraokeProjectStatus;
 use App\Http\Requests\StoreKaraokeProjectRequest;
 use App\Models\KaraokeProject;
 use App\Rules\ValidKaraokeAudio;
+use App\Support\Karaoke\KaraokeProjectShareService;
 use App\Support\Karaoke\Processing\KaraokeAudioDurationInspector;
 use App\Support\KaraokeAudioStreamService;
-use App\Support\Karaoke\KaraokeProjectShareService;
 use App\Support\KaraokeProcessingStateService;
 use App\Support\KaraokeThemeParser;
 use App\Support\KaraokeTranscriptParser;
@@ -134,7 +134,7 @@ class KaraokeProjectController extends Controller
             'usageSummary' => app(KaraokeUsageService::class)->summary(auth()->user()),
             'processingEnabled' => app(KaraokeUsageService::class)->processingEnabled(),
             'activeShare' => $activeShare,
-            'shareUrl' => session('share_url') ?? ($activeShare ? $shareService->ownerShareUrl($activeShare) : null),
+            'shareUrl' => $activeShare ? $shareService->ownerShareUrl($activeShare) : null,
         ]);
     }
 
