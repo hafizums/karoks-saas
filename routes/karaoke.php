@@ -6,6 +6,7 @@ use App\Http\Controllers\KaraokeProjectEditorController;
 use App\Http\Controllers\KaraokeProjectProcessingController;
 use App\Http\Controllers\KaraokeProjectShareController;
 use App\Http\Controllers\KaraokeProjectShareEmbedController;
+use App\Http\Controllers\KaraokeProjectVideoExportController;
 use App\Http\Controllers\KaraokePublicShareController;
 use Illuminate\Support\Facades\Route;
 
@@ -71,6 +72,7 @@ Route::middleware('auth')
         Route::delete('/{karaokeProject}/share/embed', [KaraokeProjectShareEmbedController::class, 'destroy'])
             ->middleware('throttle:karoks-share-manage')
             ->name('share.embed.destroy');
+        Route::get('/{karaokeProject}/export/video', [KaraokeProjectVideoExportController::class, 'show'])->name('export.video');
         Route::get('/{karaokeProject}/player', [KaraokeProjectController::class, 'player'])->name('player');
         Route::match(['get', 'head'], '/{karaokeProject}/audio', [KaraokeProjectController::class, 'audio'])->name('audio');
         Route::get('/{karaokeProject}/source', [KaraokeProjectController::class, 'source'])->name('source');

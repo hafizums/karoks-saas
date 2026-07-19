@@ -238,6 +238,14 @@
                     >
                         Edit lyrics & theme
                     </a>
+
+                    <a
+                        href="{{ route('karaoke.projects.export.video', $project) }}"
+                        wire:navigate
+                        class="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-lg border border-zinc-300 text-zinc-900 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-100 dark:hover:bg-zinc-800"
+                    >
+                        Export video
+                    </a>
                 @else
                     <span class="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-lg cursor-not-allowed bg-zinc-200 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400" title="Processing must complete before playback">
                         Karaoke player unavailable

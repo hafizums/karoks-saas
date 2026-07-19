@@ -7,13 +7,23 @@
                 :border="false"
             />
 
-            <a
-                href="{{ route('karaoke.projects.show', $project) }}"
-                wire:navigate
-                class="text-sm font-medium text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
-            >
-                Back to project
-            </a>
+            <div class="flex flex-wrap items-center gap-3">
+                <a
+                    href="{{ route('karaoke.projects.export.video', $project) }}"
+                    wire:navigate
+                    class="text-sm font-medium text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
+                >
+                    Export video
+                </a>
+
+                <a
+                    href="{{ route('karaoke.projects.show', $project) }}"
+                    wire:navigate
+                    class="text-sm font-medium text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
+                >
+                    Back to project
+                </a>
+            </div>
         </div>
 
         <div class="mt-6 overflow-hidden rounded-xl karoks-page">

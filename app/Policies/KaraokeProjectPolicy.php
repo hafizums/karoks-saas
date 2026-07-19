@@ -34,6 +34,11 @@ class KaraokeProjectPolicy
         return $this->owns($user, $karaokeProject) && $karaokeProject->isReadyForPlayback();
     }
 
+    public function exportVideo(User $user, KaraokeProject $karaokeProject): bool
+    {
+        return $this->owns($user, $karaokeProject) && $karaokeProject->isReadyForPlayback();
+    }
+
     public function streamAudio(User $user, KaraokeProject $karaokeProject): bool
     {
         return $this->owns($user, $karaokeProject) && $karaokeProject->playbackAudioPath() !== null;
