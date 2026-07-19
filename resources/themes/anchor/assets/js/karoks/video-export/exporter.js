@@ -70,7 +70,9 @@ export function createVideoExporterFactory(target = globalThis) {
       this._destroyed = false;
       this._blobUrls = new Set();
       this._recordedChunks = [];
-      this._animationFrameId = null;
+      this._renderIntervalId = null;
+      this._frameIntervalMs = 1000 / 30;
+      this._canvasVideoTrack = null;
       this._beforeUnloadHandler = null;
       this._recorder = null;
       this._combinedStream = null;
@@ -157,10 +159,47 @@ export function createVideoExporterFactory(target = globalThis) {
     }
 
     cancelAnimation() {
-      if (this._animationFrameId !== null) {
-        this.window.cancelAnimationFrame(this._animationFrameId);
-        this._animationFrameId = null;
+      if (this._renderIntervalId !== null) {
+        this.window.clearInterval(this._renderIntervalId);
+        this._renderIntervalId = null;
       }
+    }
+
+    requestCanvasFrame() {
+      if (this._canvasVideoTrack && typeof this._canvasVideoTrack.requestFrame === 'function') {
+        this._canvasVideoTrack.requestFrame();
+      }
+    }
+
+    drawCurrentFrame() {
+      if (!this._audioElement || !this._renderer) {
+        return;
+      }
+
+      const duration = this._audioElement.duration || this.estimatedDuration;
+      const currentTime = this._audioElement.currentTime;
+      this._renderer.drawFrame(currentTime);
+      this.requestCanvasFrame();
+      this.updateProgress(currentTime, duration);
+    }
+
+    startRenderLoop(fps) {
+      this.cancelAnimation();
+      this._frameIntervalMs = 1000 / fps;
+      this.drawCurrentFrame();
+      this._renderIntervalId = this.window.setInterval(() => {
+        if (this._destroyed || this._cancelRequested || !this._audioElement || !this._renderer) {
+          this.cancelAnimation();
+          return;
+        }
+
+        if (this._audioElement.ended) {
+          this.cancelAnimation();
+          return;
+        }
+
+        this.drawCurrentFrame();
+      }, this._frameIntervalMs);
     }
 
     detachBeforeUnload() {
@@ -237,6 +276,7 @@ export function createVideoExporterFactory(target = globalThis) {
       this._audioDestination = null;
       this._canvas = null;
       this._renderer = null;
+      this._canvasVideoTrack = null;
       this._instrumentalBlob = null;
       this._recordedChunks = [];
       this._running = false;
@@ -288,16 +328,7 @@ export function createVideoExporterFactory(target = globalThis) {
     }
 
     renderLoop() {
-      if (this._destroyed || this._cancelRequested || !this._audioElement || !this._renderer) {
-        return;
-      }
-
-      this._renderer.drawFrame(this._audioElement.currentTime);
-      this.updateProgress(this._audioElement.currentTime, this._audioElement.duration || this.estimatedDuration);
-
-      if (!this._audioElement.paused && !this._audioElement.ended) {
-        this._animationFrameId = this.window.requestAnimationFrame(() => this.renderLoop());
-      }
+      this.startRenderLoop(getResolutionConfig(this.resolutionId).fps);
     }
 
     waitForRecorderStop() {
@@ -363,6 +394,8 @@ export function createVideoExporterFactory(target = globalThis) {
         if (!this._canvasStream) {
           throw new Error('Canvas capture is unavailable in this browser.');
         }
+
+        this._canvasVideoTrack = this._canvasStream.getVideoTracks()[0] ?? null;
 
         this._audioElement = this.document.createElement('audio');
         this._audioElement.preload = 'auto';
@@ -442,6 +475,7 @@ export function createVideoExporterFactory(target = globalThis) {
         this.attachBeforeUnload();
 
         this._renderer.drawFrame(0);
+        this.requestCanvasFrame();
         this._recorder.start(RECORDER_TIMESLICE_MS);
 
         if (this._audioContext.state === 'suspended') {

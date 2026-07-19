@@ -107,6 +107,16 @@
 
                     <button
                         type="button"
+                        class="inline-flex items-center justify-center rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-100 dark:hover:bg-zinc-800"
+                        @click="newExport()"
+                        x-show="state === 'completed'"
+                        x-cloak
+                    >
+                        Export again
+                    </button>
+
+                    <button
+                        type="button"
                         class="inline-flex items-center justify-center rounded-lg bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600"
                         @click="downloadResult()"
                         x-show="state === 'completed' && downloadUrl"

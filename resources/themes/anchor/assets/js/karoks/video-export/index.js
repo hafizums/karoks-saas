@@ -180,6 +180,11 @@ export function registerKaroksVideoExport(Alpine) {
       this.destroyExporter();
     },
 
+    newExport() {
+      this.retryExport();
+      this.renderPreview();
+    },
+
     downloadResult() {
       if (!this.downloadUrl || !this.filename) {
         return;

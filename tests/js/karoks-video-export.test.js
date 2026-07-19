@@ -103,7 +103,12 @@ function createMockCanvas() {
 }
 
 function createMockMediaStream(kind = 'video') {
-  const tracks = [{ kind, stop: () => {}, enabled: true }];
+  const tracks = [{
+    kind,
+    stop: () => {},
+    enabled: true,
+    requestFrame: () => {},
+  }];
   return {
     getVideoTracks: () => (kind === 'video' ? tracks : []),
     getAudioTracks: () => (kind === 'audio' ? tracks : []),
@@ -155,8 +160,16 @@ function createSuccessfulExportMocks(overrides = {}) {
   const stoppedTracks = [];
   const revokedUrls = [];
   const recorderInstances = [];
+  const intervalHandles = [];
+  let requestFrameCalls = 0;
 
-  const videoTrack = { kind: 'video', stop: () => stoppedTracks.push('video') };
+  const videoTrack = {
+    kind: 'video',
+    stop: () => stoppedTracks.push('video'),
+    requestFrame: () => {
+      requestFrameCalls += 1;
+    },
+  };
   const audioTrack = { kind: 'audio', stop: () => stoppedTracks.push('audio') };
   const canvasStream = {
     getVideoTracks: () => [videoTrack],
@@ -277,6 +290,17 @@ function createSuccessfulExportMocks(overrides = {}) {
       fn();
       return 1;
     },
+    setInterval: (fn, delay) => {
+      const id = intervalHandles.length + 1;
+      intervalHandles.push({ id, fn, delay });
+      return id;
+    },
+    clearInterval: (id) => {
+      const index = intervalHandles.findIndex((handle) => handle.id === id);
+      if (index >= 0) {
+        intervalHandles.splice(index, 1);
+      }
+    },
     addEventListener: () => {},
     removeEventListener: () => {},
     fetch: async () => ({
@@ -328,6 +352,15 @@ function createSuccessfulExportMocks(overrides = {}) {
     },
     get animationFrameId() {
       return animationFrameId;
+    },
+    get intervalHandles() {
+      return intervalHandles;
+    },
+    get requestFrameCalls() {
+      return requestFrameCalls;
+    },
+    get videoTrack() {
+      return videoTrack;
     },
   };
 }
@@ -710,18 +743,42 @@ describe('exporter failure and cleanup paths', () => {
     assert.ok(stoppedTracks.includes('audio'));
   });
 
-  it('cancels animation frames during cleanup', async () => {
-    const { Exporter, mockDocument } = createSuccessfulExportMocks();
+  it('clears the render interval during cleanup', async () => {
+    const { Exporter, mockDocument, intervalHandles } = createSuccessfulExportMocks();
     const exporter = new Exporter({
       document: mockDocument,
       lines: sampleLines,
       audioUrl: '/karaoke/audio',
     });
 
-    exporter._animationFrameId = 42;
+    exporter._renderIntervalId = 42;
+    intervalHandles.push({ id: 42, fn: () => {}, delay: 33 });
     await exporter.cleanup();
 
-    assert.equal(exporter._animationFrameId, null);
+    assert.equal(exporter._renderIntervalId, null);
+    assert.equal(intervalHandles.length, 0);
+  });
+
+  it('requests canvas frames while recording', () => {
+    const mocks = createSuccessfulExportMocks();
+    const exporter = new mocks.Exporter({
+      document: mocks.mockDocument,
+      lines: sampleLines,
+      audioUrl: '/karaoke/audio',
+    });
+
+    exporter._canvasVideoTrack = {
+      requestFrame: () => {
+        mocks.videoTrack.requestFrame();
+      },
+    };
+    exporter._audioElement = { currentTime: 1.5, duration: 2, ended: false };
+    exporter._renderer = { drawFrame: () => {} };
+
+    exporter.drawCurrentFrame();
+    exporter.drawCurrentFrame();
+
+    assert.equal(mocks.requestFrameCalls, 2);
   });
 
   it('closes AudioContext instances during cleanup', async () => {
