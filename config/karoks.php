@@ -17,6 +17,10 @@ return [
         'mock_stage_delay_ms' => (int) env('KAROKS_MOCK_STAGE_DELAY_MS', 0),
         'overlap_release_after_seconds' => (int) env('KAROKS_PROCESSING_OVERLAP_RELEASE_SECONDS', 5),
         'overlap_expire_after_seconds' => (int) env('KAROKS_PROCESSING_OVERLAP_EXPIRE_SECONDS', 360),
+        'recovery_queued_minutes' => (int) env('KAROKS_PROCESSING_RECOVERY_QUEUED_MINUTES', 10),
+        'recovery_processing_minutes' => (int) env('KAROKS_PROCESSING_RECOVERY_PROCESSING_MINUTES', 15),
+        'recovery_limit' => (int) env('KAROKS_PROCESSING_RECOVERY_LIMIT', 50),
+        'recovery_schedule_minutes' => (int) env('KAROKS_PROCESSING_RECOVERY_SCHEDULE_MINUTES', 5),
     ],
 
     'providers' => [

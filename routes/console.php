@@ -12,3 +12,6 @@ Artisan::command('inspire', function () {
 Schedule::command('subscriptions:cancel-expired')->hourly();
 Schedule::command('accounts:process-deletions')->daily();
 Schedule::command('activity:clean')->daily();
+Schedule::command('karoks:recover-stalled-processing')
+    ->everyFiveMinutes()
+    ->withoutOverlapping();

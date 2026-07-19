@@ -7,6 +7,10 @@ use Illuminate\Support\Facades\DB;
 
 class KaraokeProcessingCheckpointService
 {
+    public function __construct(
+        private readonly KaraokeProcessingHeartbeatService $heartbeatService,
+    ) {}
+
     public function clearForFreshAttempt(KaraokeProject $project): void
     {
         $project->forceFill([
@@ -41,6 +45,9 @@ class KaraokeProcessingCheckpointService
                 'wavespeed_prediction_id' => $predictionId,
                 'wavespeed_prediction_failed_at' => null,
             ])->save();
+
+            $this->heartbeatService->touchLocked($locked, $runId);
+            $locked->save();
         });
     }
 
@@ -57,6 +64,9 @@ class KaraokeProcessingCheckpointService
                 'provider_separation_completed_at' => now(),
                 'wavespeed_prediction_failed_at' => null,
             ])->save();
+
+            $this->heartbeatService->touchLocked($locked, $runId);
+            $locked->save();
         });
     }
 
@@ -75,6 +85,9 @@ class KaraokeProcessingCheckpointService
             $locked->forceFill([
                 'provider_transcript_checkpoint' => $transcript,
             ])->save();
+
+            $this->heartbeatService->touchLocked($locked, $runId);
+            $locked->save();
         });
     }
 

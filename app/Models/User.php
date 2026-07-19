@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\Karaoke\Processing\KaraokeProcessingNotificationService;
 use App\Support\KaraokeStorage;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -81,6 +82,7 @@ class User extends WaveUser
         });
 
         static::forceDeleting(function (User $user): void {
+            app(KaraokeProcessingNotificationService::class)->cleanupForUser($user->id);
             KaraokeStorage::deleteUserFiles($user->id);
         });
     }

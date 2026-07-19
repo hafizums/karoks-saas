@@ -2,6 +2,7 @@
 
 namespace App\Support;
 
+use App\Enums\KaraokeProcessingNotificationEvent;
 use App\Enums\KaraokeProcessingStage;
 use App\Enums\KaraokeProjectStatus;
 use App\Exceptions\KaraokeProviderProcessingException;
@@ -11,6 +12,8 @@ use App\Models\User;
 use App\Support\Karaoke\Processing\KaraokeProcessingCheckpointService;
 use App\Support\Karaoke\Processing\KaraokeProcessingDriverResolver;
 use App\Support\Karaoke\Processing\KaraokeProcessingGateService;
+use App\Support\Karaoke\Processing\KaraokeProcessingHeartbeatService;
+use App\Support\Karaoke\Processing\KaraokeProcessingNotificationService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use RuntimeException;
@@ -33,6 +36,7 @@ class KaraokeProcessingStateService
         'invalid_provider_output',
         'no_lyrics_found',
         'invalid_audio',
+        'processing_stalled',
     ];
 
     public function __construct(
@@ -40,6 +44,8 @@ class KaraokeProcessingStateService
         private readonly KaraokeProcessingGateService $gateService,
         private readonly KaraokeProcessingCheckpointService $checkpointService,
         private readonly KaraokeProcessingDriverResolver $driverResolver,
+        private readonly KaraokeProcessingHeartbeatService $heartbeatService,
+        private readonly KaraokeProcessingNotificationService $notificationService,
     ) {}
 
     /**
@@ -88,6 +94,7 @@ class KaraokeProcessingStateService
                 'processing_started_at' => null,
                 'processing_completed_at' => null,
                 'processing_failed_at' => null,
+                'processing_heartbeat_at' => now(),
                 'error_code' => null,
                 'error_message' => null,
                 'processing_retryable' => null,
@@ -151,6 +158,7 @@ class KaraokeProcessingStateService
                 'processing_started_at' => null,
                 'processing_completed_at' => null,
                 'processing_failed_at' => null,
+                'processing_heartbeat_at' => now(),
                 'error_code' => null,
                 'error_message' => null,
                 'processing_retryable' => null,
@@ -183,12 +191,14 @@ class KaraokeProcessingStateService
             }
 
             $wasQueued = $locked->status === KaraokeProjectStatus::Queued;
+            $runId = (string) $locked->processing_run_id;
 
             $locked->forceFill([
                 'status' => KaraokeProjectStatus::Cancelled,
                 'processing_stage' => null,
                 'progress' => 0,
                 'processing_failed_at' => null,
+                'processing_heartbeat_at' => null,
                 'error_code' => 'cancelled',
                 'error_message' => 'Processing was cancelled.',
             ])->save();
@@ -199,6 +209,14 @@ class KaraokeProcessingStateService
 
             $this->checkpointService->clearAfterCancellation($locked);
             $this->removePartialInstrumental($locked);
+
+            if ($runId !== '') {
+                $this->notificationService->notifyTerminal(
+                    $locked,
+                    $runId,
+                    KaraokeProcessingNotificationEvent::Cancelled,
+                );
+            }
 
             return true;
         });
@@ -214,6 +232,9 @@ class KaraokeProcessingStateService
             }
 
             if ($locked->status === KaraokeProjectStatus::Processing && $locked->processing_run_id === $runId) {
+                $this->heartbeatService->touchLocked($locked, $runId);
+                $locked->save();
+
                 return true;
             }
 
@@ -227,9 +248,17 @@ class KaraokeProcessingStateService
                     'processing_stage' => null,
                     'progress' => 0,
                     'processing_failed_at' => now(),
+                    'processing_heartbeat_at' => null,
                     'error_code' => 'usage_unavailable',
                     'error_message' => 'Processing could not be started because usage accounting is unavailable.',
                 ])->save();
+
+                $this->notificationService->notifyTerminal(
+                    $locked,
+                    $runId,
+                    KaraokeProcessingNotificationEvent::Failed,
+                    'usage_unavailable',
+                );
 
                 return false;
             }
@@ -239,6 +268,7 @@ class KaraokeProcessingStateService
                 'processing_started_at' => now(),
                 'processing_stage' => KaraokeProcessingStage::Preparing->value,
                 'progress' => KaraokeProcessingStage::Preparing->progress(),
+                'processing_heartbeat_at' => now(),
             ])->save();
 
             return true;
@@ -271,6 +301,7 @@ class KaraokeProcessingStateService
             $locked->forceFill([
                 'processing_stage' => $stage->value,
                 'progress' => max((int) $locked->progress, $progress),
+                'processing_heartbeat_at' => now(),
             ])->save();
 
             return true;
@@ -309,19 +340,32 @@ class KaraokeProcessingStateService
                 'transcript' => $result->transcript,
                 'theme' => $result->theme,
                 'processing_completed_at' => now(),
+                'processing_heartbeat_at' => null,
                 'error_code' => null,
                 'error_message' => $result->disclosure,
             ])->save();
 
             $this->checkpointService->clearAfterCompletion($locked, $runId);
 
+            $this->notificationService->notifyTerminal(
+                $locked,
+                $runId,
+                KaraokeProcessingNotificationEvent::Completed,
+            );
+
             return true;
         });
     }
 
-    public function markFailed(KaraokeProject $project, string $runId, string $errorCode, string $errorMessage, bool $retryable = true): bool
-    {
-        return DB::transaction(function () use ($project, $runId, $errorCode, $errorMessage, $retryable) {
+    public function markFailed(
+        KaraokeProject $project,
+        string $runId,
+        string $errorCode,
+        string $errorMessage,
+        bool $retryable = true,
+        ?KaraokeProcessingNotificationEvent $notificationEvent = null,
+    ): bool {
+        return DB::transaction(function () use ($project, $runId, $errorCode, $errorMessage, $retryable, $notificationEvent) {
             $locked = KaraokeProject::query()->whereKey($project->id)->lockForUpdate()->first();
 
             if ($locked === null || ! $this->runIsActive($locked, $runId)) {
@@ -334,6 +378,7 @@ class KaraokeProcessingStateService
 
             $safeCode = $this->sanitizeErrorCode($errorCode);
             $safeMessage = $this->sanitizeErrorMessage($errorMessage);
+            $event = $notificationEvent ?? KaraokeProcessingNotificationEvent::Failed;
 
             $locked->forceFill([
                 'status' => KaraokeProjectStatus::Failed,
@@ -344,12 +389,24 @@ class KaraokeProcessingStateService
                 'transcript' => null,
                 'theme' => null,
                 'processing_failed_at' => now(),
+                'processing_heartbeat_at' => null,
                 'error_code' => $safeCode,
                 'error_message' => $safeMessage,
                 'processing_retryable' => $retryable,
             ])->save();
 
             $this->removePartialInstrumental($locked);
+
+            if ($event === KaraokeProcessingNotificationEvent::Stalled) {
+                $this->checkpointService->clearAfterCancellation($locked);
+            }
+
+            $this->notificationService->notifyTerminal(
+                $locked,
+                $runId,
+                $event,
+                $safeCode,
+            );
 
             return true;
         });
@@ -410,7 +467,30 @@ class KaraokeProcessingStateService
             return false;
         }
 
+        if (! in_array($project->status, [KaraokeProjectStatus::Queued, KaraokeProjectStatus::Processing], true)) {
+            return false;
+        }
+
         return true;
+    }
+
+    public function refreshHeartbeat(KaraokeProject $project, string $runId): bool
+    {
+        return DB::transaction(function () use ($project, $runId) {
+            $locked = KaraokeProject::query()->whereKey($project->id)->lockForUpdate()->first();
+
+            if ($locked === null) {
+                return false;
+            }
+
+            if (! $this->heartbeatService->touchLocked($locked, $runId)) {
+                return false;
+            }
+
+            $locked->save();
+
+            return true;
+        });
     }
 
     /**

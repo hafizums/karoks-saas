@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\KaraokeProjectStatus;
+use App\Support\Karaoke\Processing\KaraokeProcessingNotificationService;
 use App\Support\KaraokeProcessingStateService;
 use App\Support\KaraokeStorage;
 use App\Support\KaraokeTranscriptParser;
@@ -37,6 +38,7 @@ class KaraokeProject extends Model
         'processing_started_at',
         'processing_completed_at',
         'processing_failed_at',
+        'processing_heartbeat_at',
         'progress',
         'rights_confirmed_at',
         'provider_consent_confirmed_at',
@@ -78,6 +80,7 @@ class KaraokeProject extends Model
             'processing_started_at' => 'datetime',
             'processing_completed_at' => 'datetime',
             'processing_failed_at' => 'datetime',
+            'processing_heartbeat_at' => 'datetime',
             'transcript' => 'array',
             'theme' => 'array',
             'editor_revision' => 'integer',
@@ -179,6 +182,7 @@ class KaraokeProject extends Model
 
         static::deleting(function (KaraokeProject $project): void {
             app(KaraokeProcessingStateService::class)->releaseUsageForDeletedProject($project);
+            app(KaraokeProcessingNotificationService::class)->cleanupForProject($project);
             KaraokeStorage::deleteProjectFiles($project);
         });
     }
