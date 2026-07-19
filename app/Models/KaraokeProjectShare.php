@@ -16,6 +16,9 @@ class KaraokeProjectShare extends Model
         'token_ciphertext',
         'expires_at',
         'revoked_at',
+        'embedding_enabled',
+        'embed_allowed_origins',
+        'embedding_updated_at',
     ];
 
     protected $hidden = [
@@ -31,6 +34,9 @@ class KaraokeProjectShare extends Model
         return [
             'expires_at' => 'datetime',
             'revoked_at' => 'datetime',
+            'embedding_enabled' => 'boolean',
+            'embed_allowed_origins' => 'array',
+            'embedding_updated_at' => 'datetime',
         ];
     }
 
@@ -62,6 +68,18 @@ class KaraokeProjectShare extends Model
     public function isActive(): bool
     {
         return ! $this->isRevoked() && ! $this->isExpired();
+    }
+
+    public function hasEmbedAllowlist(): bool
+    {
+        return is_array($this->embed_allowed_origins) && $this->embed_allowed_origins !== [];
+    }
+
+    public function isEmbeddingActive(): bool
+    {
+        return $this->isActive()
+            && $this->embedding_enabled
+            && $this->hasEmbedAllowlist();
     }
 
     protected static function booted(): void

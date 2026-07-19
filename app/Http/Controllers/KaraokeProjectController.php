@@ -126,6 +126,9 @@ class KaraokeProjectController extends Controller
 
         $shareService = app(KaraokeProjectShareService::class);
         $activeShare = $shareService->activeShareForProject($karaokeProject);
+        $embedPresentation = $activeShare
+            ? $shareService->ownerEmbedPresentation($activeShare, $karaokeProject->title)
+            : null;
 
         return view('theme::karaoke.show', [
             'project' => $karaokeProject,
@@ -135,6 +138,8 @@ class KaraokeProjectController extends Controller
             'processingEnabled' => app(KaraokeUsageService::class)->processingEnabled(),
             'activeShare' => $activeShare,
             'shareUrl' => $activeShare ? $shareService->ownerShareUrl($activeShare) : null,
+            'embedUrl' => $embedPresentation[0] ?? null,
+            'embedIframeMarkup' => $embedPresentation[1] ?? null,
         ]);
     }
 

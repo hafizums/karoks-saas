@@ -6,6 +6,8 @@ use App\Enums\KaraokeShareExpirationOption;
 use App\Models\KaraokeProject;
 use App\Models\KaraokeProjectShare;
 use App\Models\User;
+use App\Support\Karaoke\Embed\KaraokeEmbedIframeGenerator;
+use App\Support\Karaoke\Embed\KaraokeEmbedOriginParser;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Crypt;
@@ -183,6 +185,128 @@ class KaraokeProjectShareService
             'share' => $share->public_id,
             'token' => $token,
         ]);
+    }
+
+    /**
+     * @param  list<string>  $originInputs
+     */
+    public function enableEmbedding(KaraokeProject $project, User $user, array $originInputs): KaraokeProjectShare
+    {
+        $this->assertOwnerCanShare($project, $user);
+        $origins = app(KaraokeEmbedOriginParser::class)->parseMany($originInputs);
+
+        return $this->runShareTransaction(function () use ($project, $user, $origins): KaraokeProjectShare {
+            KaraokeProject::query()
+                ->whereKey($project->getKey())
+                ->lockForUpdate()
+                ->first();
+
+            $share = $this->lockActiveShareForProject($project);
+
+            if ($share === null) {
+                throw ValidationException::withMessages([
+                    'embed' => 'An active public link is required before embedding can be enabled.',
+                ]);
+            }
+
+            if ((int) $share->created_by_user_id !== (int) $user->getKey()) {
+                abort(403);
+            }
+
+            $share->forceFill([
+                'embedding_enabled' => true,
+                'embed_allowed_origins' => $origins,
+                'embedding_updated_at' => now(),
+            ])->save();
+
+            return $share->fresh();
+        });
+    }
+
+    public function disableEmbedding(KaraokeProject $project, User $user): KaraokeProjectShare
+    {
+        $this->assertOwnerCanShare($project, $user);
+
+        return $this->runShareTransaction(function () use ($project, $user): KaraokeProjectShare {
+            KaraokeProject::query()
+                ->whereKey($project->getKey())
+                ->lockForUpdate()
+                ->first();
+
+            $share = $this->lockActiveShareForProject($project);
+
+            if ($share === null) {
+                throw ValidationException::withMessages([
+                    'embed' => 'An active public link is required before embedding can be disabled.',
+                ]);
+            }
+
+            if ((int) $share->created_by_user_id !== (int) $user->getKey()) {
+                abort(403);
+            }
+
+            $share->forceFill([
+                'embedding_enabled' => false,
+                'embedding_updated_at' => now(),
+            ])->save();
+
+            return $share->fresh();
+        });
+    }
+
+    public function resolveEmbeddableShare(string $sharePublicId, string $token): ?KaraokeProjectShare
+    {
+        $share = $this->resolvePublicShare($sharePublicId, $token);
+
+        if ($share === null || ! $share->isEmbeddingActive()) {
+            return null;
+        }
+
+        $origins = app(KaraokeEmbedOriginParser::class)->normalizeStoredOrigins($share->embed_allowed_origins);
+
+        if ($origins === []) {
+            return null;
+        }
+
+        $share->setAttribute('embed_allowed_origins', $origins);
+
+        return $share;
+    }
+
+    public function buildEmbedUrl(KaraokeProjectShare $share, string $token): string
+    {
+        return route('karaoke.embed.show', [
+            'share' => $share->public_id,
+            'token' => $token,
+        ]);
+    }
+
+    public function ownerEmbedUrl(KaraokeProjectShare $share): ?string
+    {
+        try {
+            $token = $this->decryptStoredToken($share);
+        } catch (DecryptException) {
+            return null;
+        }
+
+        return $this->buildEmbedUrl($share, $token);
+    }
+
+    /**
+     * @return array{0: string, 1: string}|null
+     */
+    public function ownerEmbedPresentation(KaraokeProjectShare $share, string $title): ?array
+    {
+        $embedUrl = $this->ownerEmbedUrl($share);
+
+        if ($embedUrl === null) {
+            return null;
+        }
+
+        return [
+            $embedUrl,
+            app(KaraokeEmbedIframeGenerator::class)->generate($embedUrl, $title),
+        ];
     }
 
     /**

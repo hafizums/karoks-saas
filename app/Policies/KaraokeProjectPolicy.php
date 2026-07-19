@@ -117,6 +117,11 @@ class KaraokeProjectPolicy
         return $this->share($user, $karaokeProject);
     }
 
+    public function manageEmbed(User $user, KaraokeProject $karaokeProject): bool
+    {
+        return $this->share($user, $karaokeProject);
+    }
+
     private function owns(User $user, KaraokeProject $karaokeProject): bool
     {
         return (int) $karaokeProject->user_id === (int) $user->id;

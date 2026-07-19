@@ -125,5 +125,13 @@ class AppServiceProvider extends ServiceProvider
 
             return Limit::perMinute(10)->by($userId.':'.$projectKey);
         });
+
+        RateLimiter::for('karoks-public-embed', function (Request $request) {
+            $shareId = (string) $request->route('share');
+            $token = (string) $request->route('token');
+            $credentialKey = hash('sha256', $shareId.':'.$token);
+
+            return Limit::perMinute(60)->by($request->ip().':'.$credentialKey);
+        });
     }
 }

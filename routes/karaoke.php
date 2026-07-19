@@ -1,11 +1,21 @@
 <?php
 
+use App\Http\Controllers\KaraokeEmbedController;
 use App\Http\Controllers\KaraokeProjectController;
 use App\Http\Controllers\KaraokeProjectEditorController;
 use App\Http\Controllers\KaraokeProjectProcessingController;
 use App\Http\Controllers\KaraokeProjectShareController;
+use App\Http\Controllers\KaraokeProjectShareEmbedController;
 use App\Http\Controllers\KaraokePublicShareController;
 use Illuminate\Support\Facades\Route;
+
+Route::prefix('karaoke/embed')
+    ->name('karaoke.embed.')
+    ->group(function (): void {
+        Route::get('/{share}/{token}', [KaraokeEmbedController::class, 'show'])
+            ->middleware('throttle:karoks-public-embed')
+            ->name('show');
+    });
 
 Route::prefix('karaoke/shared')
     ->name('karaoke.shared.')
@@ -55,6 +65,12 @@ Route::middleware('auth')
             ->name('share.rotate');
         Route::delete('/{karaokeProject}/share', [KaraokeProjectShareController::class, 'destroy'])
             ->name('share.destroy');
+        Route::patch('/{karaokeProject}/share/embed', [KaraokeProjectShareEmbedController::class, 'update'])
+            ->middleware('throttle:karoks-share-manage')
+            ->name('share.embed.update');
+        Route::delete('/{karaokeProject}/share/embed', [KaraokeProjectShareEmbedController::class, 'destroy'])
+            ->middleware('throttle:karoks-share-manage')
+            ->name('share.embed.destroy');
         Route::get('/{karaokeProject}/player', [KaraokeProjectController::class, 'player'])->name('player');
         Route::match(['get', 'head'], '/{karaokeProject}/audio', [KaraokeProjectController::class, 'audio'])->name('audio');
         Route::get('/{karaokeProject}/source', [KaraokeProjectController::class, 'source'])->name('source');
