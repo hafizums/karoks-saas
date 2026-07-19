@@ -3,15 +3,26 @@
 namespace App\Support\Karaoke\Providers;
 
 use App\Exceptions\KaraokeProviderProcessingException;
+use Illuminate\Http\Client\ConnectionException;
 
 class KaraokeProviderErrorMapper
 {
+    /**
+     * @var list<string>
+     */
+    private const BILLABLE_POST_STEPS = ['isolator_submit', 'transcribe'];
+
+    /**
+     * @var list<string>
+     */
+    private const TRANSIENT_READ_STEPS = ['poll', 'download', 'upload'];
+
     /**
      * @return array{error_code: string, user_message: string, queue_retryable: bool, manual_retryable: bool, invalidates_separation: bool}
      */
     public function mapHttpFailure(string $provider, int $status, string $step = 'request'): array
     {
-        $billablePost = in_array($step, ['isolator_submit'], true);
+        $billablePost = in_array($step, self::BILLABLE_POST_STEPS, true);
 
         if ($provider === 'wavespeed') {
             return $this->mapWaveSpeedStatus($status, $billablePost, $step);
@@ -52,15 +63,55 @@ class KaraokeProviderErrorMapper
      */
     public function mapElevenLabsStatus(int $status, string $step = 'request'): array
     {
-        unset($step);
+        $billablePost = $step === 'transcribe';
 
         return match (true) {
             $status === 401, $status === 403 => $this->mapping('provider_auth_failed', 'Real processing is unavailable because transcription authentication failed.', false, false),
-            $status === 408 => $this->mapping('provider_timeout', 'Transcription timed out. Please try again.', true, true),
-            $status === 429 => $this->mapping('provider_rate_limited', 'Transcription is temporarily rate limited. Please try again shortly.', true, true),
-            $status >= 500 => $this->mapping('provider_failed', 'Transcription failed at the provider. Please try again.', true, true),
+            $status === 408 => $this->mapping('provider_timeout', 'Transcription timed out. Please try again.', ! $billablePost, true),
+            $status === 429 => $this->mapping('provider_rate_limited', 'Transcription is temporarily rate limited. Please try again shortly.', ! $billablePost, true),
+            $status >= 500 => $this->mapping('provider_failed', 'Transcription failed at the provider. Please try again.', ! $billablePost, true),
             default => $this->mapping('invalid_provider_output', 'Transcription could not be completed for this audio.', false, false),
         };
+    }
+
+    public function mapTransportFailure(string $provider, string $step, ?ConnectionException $exception = null): KaraokeProviderProcessingException
+    {
+        unset($exception);
+
+        $billablePost = in_array($step, self::BILLABLE_POST_STEPS, true);
+        $transientRead = in_array($step, self::TRANSIENT_READ_STEPS, true);
+
+        if ($billablePost) {
+            return new KaraokeProviderProcessingException(
+                errorCode: 'provider_timeout',
+                userMessage: $provider === 'elevenlabs'
+                    ? 'Transcription could not reach the provider. Please try again manually.'
+                    : 'Processing could not reach the provider. Please try again manually.',
+                queueRetryable: false,
+                manualRetryable: true,
+                invalidatesSeparationCheckpoint: false,
+            );
+        }
+
+        if ($transientRead || $step === 'request') {
+            return new KaraokeProviderProcessingException(
+                errorCode: 'provider_timeout',
+                userMessage: $provider === 'elevenlabs'
+                    ? 'Transcription timed out while contacting the provider. Please try again.'
+                    : 'Processing timed out while contacting the provider. Please try again.',
+                queueRetryable: true,
+                manualRetryable: true,
+                invalidatesSeparationCheckpoint: false,
+            );
+        }
+
+        return new KaraokeProviderProcessingException(
+            errorCode: 'provider_timeout',
+            userMessage: 'Processing timed out while contacting the provider. Please try again.',
+            queueRetryable: false,
+            manualRetryable: true,
+            invalidatesSeparationCheckpoint: false,
+        );
     }
 
     /**

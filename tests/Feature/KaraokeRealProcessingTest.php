@@ -18,7 +18,9 @@ use App\Support\KaraokeProcessorManager;
 use App\Support\KaraokeStorage;
 use App\Support\KaraokeTranscriptParser;
 use DevDojo\Themes\Models\Theme;
+use GuzzleHttp\Exception\ConnectException;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Http;
@@ -169,6 +171,49 @@ function fakeProviderHttp(string $vocalDownloadHost = 'cdn.example.test', string
 function runRealProcessingJob(KaraokeProject $project): void
 {
     runKaraokeProcessingJob($project);
+}
+
+function throwProviderConnectionFailure(): never
+{
+    throw new ConnectionException(
+        new ConnectException(
+            'Connection timed out',
+            new GuzzleHttp\Psr7\Request('POST', 'https://provider.test'),
+        ),
+    );
+}
+
+function fakeProviderFlowThroughSeparation(string $predictionId = 'pred-transcript-flow'): void
+{
+    Http::fake(function (Request $request) use ($predictionId) {
+        $url = $request->url();
+
+        if ($url === 'https://api.wavespeed.ai/api/v3/media/upload/binary') {
+            return Http::response(['data' => ['download_url' => 'https://uploads.example.test/source.wav']], 200);
+        }
+
+        if ($url === 'https://api.wavespeed.ai/api/v3/wavespeed-ai/audio-vocal-isolator') {
+            return Http::response(['data' => ['id' => $predictionId]], 200);
+        }
+
+        if ($url === 'https://api.wavespeed.ai/api/v3/predictions/'.$predictionId.'/result') {
+            return Http::response([
+                'data' => [
+                    'status' => 'completed',
+                    'outputs' => [
+                        'https://cdn.example.test/vocal.mp3',
+                        'https://cdn.example.test/instrumental.mp3',
+                    ],
+                ],
+            ], 200);
+        }
+
+        if ($url === 'https://cdn.example.test/vocal.mp3' || $url === 'https://cdn.example.test/instrumental.mp3') {
+            return Http::response(realProcessingWavBytes(), 200, ['Content-Type' => 'audio/mpeg']);
+        }
+
+        return Http::response('unexpected', 500);
+    });
 }
 
 beforeEach(function () {
@@ -898,4 +943,204 @@ it('does not submit isolation after cancellation between upload and isolation', 
 
     expect($isolatorCalls)->toBe(0)
         ->and($project->fresh()->status)->toBe(KaraokeProjectStatus::Cancelled);
+});
+
+it('submits wavespeed isolation only once after a connection failure and leaves manual retry enabled', function () {
+    configureRealProcessing();
+    Http::preventStrayRequests();
+
+    $isolatorCalls = 0;
+
+    Http::fake([
+        'api.wavespeed.ai/api/v3/media/upload/binary' => Http::response(['data' => ['download_url' => 'https://uploads.example.test/source.wav']], 200),
+        'api.wavespeed.ai/api/v3/wavespeed-ai/audio-vocal-isolator' => function () use (&$isolatorCalls) {
+            $isolatorCalls++;
+            throwProviderConnectionFailure();
+        },
+    ]);
+
+    $project = createRealProcessingProject(realProcessingUser());
+    app(KaraokeProcessingStateService::class)->queueForProcessing($project, true);
+
+    runRealProcessingJob($project->fresh());
+
+    $project->refresh();
+
+    expect($isolatorCalls)->toBe(1)
+        ->and($project->status)->toBe(KaraokeProjectStatus::Failed)
+        ->and($project->error_code)->toBe('provider_timeout')
+        ->and(app(KaraokeProcessingStateService::class)->isRetryable($project))->toBeTrue()
+        ->and($project->wavespeed_prediction_id)->toBeNull();
+
+    runRealProcessingJob($project->fresh());
+
+    expect($isolatorCalls)->toBe(1);
+});
+
+it('submits elevenlabs transcription only once after an ambiguous 502 and leaves manual retry enabled', function () {
+    configureRealProcessing();
+    Http::preventStrayRequests();
+
+    $elevenCalls = 0;
+
+    Http::fake([
+        'api.wavespeed.ai/api/v3/media/upload/binary' => Http::response(['data' => ['download_url' => 'https://uploads.example.test/source.wav']], 200),
+        'api.wavespeed.ai/api/v3/wavespeed-ai/audio-vocal-isolator' => Http::response(['data' => ['id' => 'pred-eleven-502']], 200),
+        'api.wavespeed.ai/api/v3/predictions/pred-eleven-502/result' => Http::response([
+            'data' => [
+                'status' => 'completed',
+                'outputs' => [
+                    'https://cdn.example.test/vocal.mp3',
+                    'https://cdn.example.test/instrumental.mp3',
+                ],
+            ],
+        ], 200),
+        'cdn.example.test/*' => Http::response(realProcessingWavBytes(), 200, ['Content-Type' => 'audio/mpeg']),
+        'api.elevenlabs.io/*' => function () use (&$elevenCalls) {
+            $elevenCalls++;
+
+            return Http::response(['message' => 'upstream'], 502);
+        },
+    ]);
+
+    $project = createRealProcessingProject(realProcessingUser());
+    app(KaraokeProcessingStateService::class)->queueForProcessing($project, true);
+
+    runRealProcessingJob($project->fresh());
+
+    $project->refresh();
+
+    expect($elevenCalls)->toBe(1)
+        ->and($project->status)->toBe(KaraokeProjectStatus::Failed)
+        ->and($project->error_code)->toBe('provider_failed')
+        ->and(app(KaraokeProcessingStateService::class)->isRetryable($project))->toBeTrue();
+
+    runRealProcessingJob($project->fresh());
+
+    expect($elevenCalls)->toBe(1);
+});
+
+it('submits elevenlabs transcription only once after a connection failure and leaves manual retry enabled', function () {
+    configureRealProcessing();
+    Http::preventStrayRequests();
+
+    $elevenCalls = 0;
+
+    Http::fake([
+        'api.wavespeed.ai/api/v3/media/upload/binary' => Http::response(['data' => ['download_url' => 'https://uploads.example.test/source.wav']], 200),
+        'api.wavespeed.ai/api/v3/wavespeed-ai/audio-vocal-isolator' => Http::response(['data' => ['id' => 'pred-eleven-conn']], 200),
+        'api.wavespeed.ai/api/v3/predictions/pred-eleven-conn/result' => Http::response([
+            'data' => [
+                'status' => 'completed',
+                'outputs' => [
+                    'https://cdn.example.test/vocal.mp3',
+                    'https://cdn.example.test/instrumental.mp3',
+                ],
+            ],
+        ], 200),
+        'cdn.example.test/*' => Http::response(realProcessingWavBytes(), 200, ['Content-Type' => 'audio/mpeg']),
+        'api.elevenlabs.io/*' => function () use (&$elevenCalls) {
+            $elevenCalls++;
+            throwProviderConnectionFailure();
+        },
+    ]);
+
+    $project = createRealProcessingProject(realProcessingUser());
+    app(KaraokeProcessingStateService::class)->queueForProcessing($project, true);
+
+    runRealProcessingJob($project->fresh());
+
+    $project->refresh();
+
+    expect($elevenCalls)->toBe(1)
+        ->and($project->status)->toBe(KaraokeProjectStatus::Failed)
+        ->and($project->error_code)->toBe('provider_timeout')
+        ->and(app(KaraokeProcessingStateService::class)->isRetryable($project))->toBeTrue();
+
+    runRealProcessingJob($project->fresh());
+
+    expect($elevenCalls)->toBe(1);
+});
+
+it('reuses the saved prediction checkpoint after a polling connection failure', function () {
+    configureRealProcessing();
+    Http::preventStrayRequests();
+
+    $isolatorCalls = 0;
+    $pollCalls = 0;
+
+    Http::fake(function (Request $request) use (&$isolatorCalls, &$pollCalls) {
+        $url = $request->url();
+
+        if ($url === 'https://api.wavespeed.ai/api/v3/media/upload/binary') {
+            return Http::response(['data' => ['download_url' => 'https://uploads.example.test/source.wav']], 200);
+        }
+
+        if ($url === 'https://api.wavespeed.ai/api/v3/wavespeed-ai/audio-vocal-isolator') {
+            $isolatorCalls++;
+
+            return Http::response(['data' => ['id' => 'pred-poll-retry']], 200);
+        }
+
+        if ($url === 'https://api.wavespeed.ai/api/v3/predictions/pred-poll-retry/result') {
+            $pollCalls++;
+
+            if ($pollCalls === 1) {
+                throwProviderConnectionFailure();
+            }
+
+            return Http::response([
+                'data' => [
+                    'status' => 'completed',
+                    'outputs' => [
+                        'https://cdn.example.test/vocal.mp3',
+                        'https://cdn.example.test/instrumental.mp3',
+                    ],
+                ],
+            ], 200);
+        }
+
+        if ($url === 'https://api.elevenlabs.io/v1/speech-to-text') {
+            return Http::response([
+                'words' => [
+                    fakeElevenLabsWord('Hello', 0.2, 0.6),
+                    fakeElevenLabsWord('world', 0.7, 1.1),
+                ],
+            ], 200);
+        }
+
+        if ($url === 'https://cdn.example.test/vocal.mp3' || $url === 'https://cdn.example.test/instrumental.mp3') {
+            return Http::response(realProcessingWavBytes(), 200, ['Content-Type' => 'audio/mpeg']);
+        }
+
+        return Http::response('unexpected request: '.$url, 500);
+    });
+
+    $project = createRealProcessingProject(realProcessingUser());
+    app(KaraokeProcessingStateService::class)->queueForProcessing($project, true);
+    $project->refresh();
+
+    $job = new ProcessKaraokeProject($project->id, (string) $project->processing_run_id);
+
+    try {
+        $job->handle(app(KaraokeProcessingStateService::class));
+    } catch (KaraokeProviderProcessingException $exception) {
+        expect($exception->queueRetryable)->toBeTrue()
+            ->and($exception->errorCode)->toBe('provider_timeout');
+    }
+
+    $project->refresh();
+
+    expect($isolatorCalls)->toBe(1)
+        ->and($pollCalls)->toBe(1)
+        ->and($project->wavespeed_prediction_id)->toBe('pred-poll-retry')
+        ->and($project->status)->toBe(KaraokeProjectStatus::Processing);
+
+    $job->handle(app(KaraokeProcessingStateService::class));
+
+    $project->refresh();
+
+    expect($isolatorCalls)->toBe(1)
+        ->and($pollCalls)->toBe(2)
+        ->and($project->status)->toBe(KaraokeProjectStatus::Completed);
 });

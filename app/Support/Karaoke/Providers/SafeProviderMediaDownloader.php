@@ -4,6 +4,7 @@ namespace App\Support\Karaoke\Providers;
 
 use App\Exceptions\KaraokeProviderProcessingException;
 use App\Rules\ValidKaraokeAudio;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -47,12 +48,18 @@ class SafeProviderMediaDownloader
         while (true) {
             $this->assertSafeUrl($currentUrl);
 
-            $response = Http::withOptions([
-                'stream' => true,
-                'allow_redirects' => false,
-                'connect_timeout' => $connectTimeout,
-                'timeout' => $requestTimeout,
-            ])->get($currentUrl);
+            try {
+                $response = Http::withOptions([
+                    'stream' => true,
+                    'allow_redirects' => false,
+                    'connect_timeout' => $connectTimeout,
+                    'timeout' => $requestTimeout,
+                ])->get($currentUrl);
+            } catch (ConnectionException $exception) {
+                @unlink($tempPath);
+
+                throw app(KaraokeProviderErrorMapper::class)->mapTransportFailure('wavespeed', 'download', $exception);
+            }
 
             if ($response->redirect()) {
                 @unlink($tempPath);

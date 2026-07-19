@@ -158,10 +158,6 @@ class ProcessKaraokeProject implements ShouldQueue
         } catch (KaraokeProcessingException $exception) {
             throw $exception;
         } catch (Throwable $exception) {
-            if ($this->isRetryableThrowable($exception)) {
-                throw $exception;
-            }
-
             $fresh = KaraokeProject::query()->find($project->id);
 
             if ($fresh !== null) {
@@ -170,7 +166,7 @@ class ProcessKaraokeProject implements ShouldQueue
                     $this->processingRunId,
                     'processing_failed',
                     'Processing could not be completed. Please try again.',
-                    retryable: false,
+                    retryable: true,
                 );
             }
         }
@@ -215,10 +211,5 @@ class ProcessKaraokeProject implements ShouldQueue
             'unsupported_audio' => 'This audio format is not supported.',
             default => 'Processing could not be completed.',
         };
-    }
-
-    private function isRetryableThrowable(Throwable $exception): bool
-    {
-        return ! $exception instanceof NonRetryableKaraokeProcessingException;
     }
 }

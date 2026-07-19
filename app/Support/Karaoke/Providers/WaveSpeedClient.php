@@ -2,6 +2,8 @@
 
 namespace App\Support\Karaoke\Providers;
 
+use Closure;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 
@@ -37,11 +39,13 @@ class WaveSpeedClient
         }
 
         try {
-            $response = Http::withToken($apiKey)
-                ->connectTimeout($this->connectTimeout())
-                ->timeout($this->requestTimeout())
-                ->attach('file', $handle, $filename, ['Content-Type' => $mimeType])
-                ->post(self::UPLOAD_URL);
+            $response = $this->request('wavespeed', 'upload', function () use ($apiKey, $handle, $filename, $mimeType): Response {
+                return Http::withToken($apiKey)
+                    ->connectTimeout($this->connectTimeout())
+                    ->timeout($this->requestTimeout())
+                    ->attach('file', $handle, $filename, ['Content-Type' => $mimeType])
+                    ->post(self::UPLOAD_URL);
+            });
         } finally {
             fclose($handle);
         }
@@ -60,13 +64,15 @@ class WaveSpeedClient
 
     public function submitVocalIsolation(string $audioUrl): string
     {
-        $response = Http::withToken($this->apiKey())
-            ->connectTimeout($this->connectTimeout())
-            ->timeout($this->requestTimeout())
-            ->acceptJson()
-            ->post(self::ISOLATOR_URL, [
-                'audio' => $audioUrl,
-            ]);
+        $response = $this->request('wavespeed', 'isolator_submit', function () use ($audioUrl): Response {
+            return Http::withToken($this->apiKey())
+                ->connectTimeout($this->connectTimeout())
+                ->timeout($this->requestTimeout())
+                ->acceptJson()
+                ->post(self::ISOLATOR_URL, [
+                    'audio' => $audioUrl,
+                ]);
+        });
 
         $this->guardResponse($response, 'wavespeed', 'isolator_submit');
 
@@ -86,11 +92,13 @@ class WaveSpeedClient
      */
     public function fetchPredictionStatus(string $predictionId): array
     {
-        $response = Http::withToken($this->apiKey())
-            ->connectTimeout($this->connectTimeout())
-            ->timeout($this->requestTimeout())
-            ->acceptJson()
-            ->get($this->resultUrl($predictionId));
+        $response = $this->request('wavespeed', 'poll', function () use ($predictionId): Response {
+            return Http::withToken($this->apiKey())
+                ->connectTimeout($this->connectTimeout())
+                ->timeout($this->requestTimeout())
+                ->acceptJson()
+                ->get($this->resultUrl($predictionId));
+        });
 
         $this->guardResponse($response, 'wavespeed', 'poll');
 
@@ -237,6 +245,18 @@ class WaveSpeedClient
         throw $this->errors->exceptionFromMapping(
             $this->errors->mapHttpFailure($provider, $response->status(), $step),
         );
+    }
+
+    /**
+     * @param  Closure(): Response  $callback
+     */
+    private function request(string $provider, string $step, Closure $callback): Response
+    {
+        try {
+            return $callback();
+        } catch (ConnectionException $exception) {
+            throw $this->errors->mapTransportFailure($provider, $step, $exception);
+        }
     }
 
     private function resultUrl(string $predictionId): string

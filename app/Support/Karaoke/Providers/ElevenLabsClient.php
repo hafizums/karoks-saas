@@ -2,6 +2,8 @@
 
 namespace App\Support\Karaoke\Providers;
 
+use Closure;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 
@@ -27,18 +29,20 @@ class ElevenLabsClient
         }
 
         try {
-            $response = Http::withHeaders([
-                'xi-api-key' => $this->apiKey(),
-            ])
-                ->connectTimeout($this->connectTimeout())
-                ->timeout($this->requestTimeout())
-                ->attach('file', $handle, $filename, ['Content-Type' => $mimeType])
-                ->post(self::STT_URL, [
-                    'model_id' => 'scribe_v2',
-                    'timestamps_granularity' => 'word',
-                    'tag_audio_events' => 'false',
-                    'diarize' => 'false',
-                ]);
+            $response = $this->request('elevenlabs', 'transcribe', function () use ($handle, $filename, $mimeType): Response {
+                return Http::withHeaders([
+                    'xi-api-key' => $this->apiKey(),
+                ])
+                    ->connectTimeout($this->connectTimeout())
+                    ->timeout($this->requestTimeout())
+                    ->attach('file', $handle, $filename, ['Content-Type' => $mimeType])
+                    ->post(self::STT_URL, [
+                        'model_id' => 'scribe_v2',
+                        'timestamps_granularity' => 'word',
+                        'tag_audio_events' => 'false',
+                        'diarize' => 'false',
+                    ]);
+            });
         } finally {
             fclose($handle);
         }
@@ -77,6 +81,18 @@ class ElevenLabsClient
         }
 
         return $decoded;
+    }
+
+    /**
+     * @param  Closure(): Response  $callback
+     */
+    private function request(string $provider, string $step, Closure $callback): Response
+    {
+        try {
+            return $callback();
+        } catch (ConnectionException $exception) {
+            throw $this->errors->mapTransportFailure($provider, $step, $exception);
+        }
     }
 
     private function apiKey(): string
